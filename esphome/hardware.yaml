@@ -1,0 +1,81 @@
+# reTerminal Sticky (E1005) hardware. Pins checked against:
+# - ESPHome epaper_spi model "seeed-reterminal-sticky" (display pins)
+# - ESPHome Designer hardware/seeedstudio-reterminal-sticky.yaml (power, touch, buttons)
+# - github.com/danpodeanu/seeed-reterminal-E100X common/include/board_pins.h
+esphome:
+  min_version: 2026.10.0
+  on_boot:
+    - priority: 900
+      then:
+        # WHY: GPIO45/46 latch the battery power on; release any hold left from deep sleep first
+        - lambda: |-
+            gpio_hold_dis(GPIO_NUM_45);
+            gpio_hold_dis(GPIO_NUM_46);
+            gpio_deep_sleep_hold_dis();
+        - output.turn_on: pwr_hold
+        - output.turn_on: pwr_lock
+        - output.turn_on: charge_enable
+        - switch.turn_on: touch_power
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  flash_size: 32MB
+  cpu_frequency: 240MHz
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_ESP32S3_DATA_CACHE_64KB: y
+    advanced:
+      # WHY: required by ESPHome for OTA updates on 32 MB flash
+      enable_idf_experimental_features: true
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+spi:
+  - id: epaper_bus
+    clk_pin: GPIO13
+    mosi_pin: GPIO14
+    miso_pin: GPIO12
+
+i2c:
+  - id: i2c_main
+    sda: GPIO1
+    scl: GPIO0
+    scan: true
+    frequency: 100kHz
+  - id: i2c_touch
+    sda: GPIO3
+    scl: GPIO2
+    scan: true
+    frequency: 100kHz
+
+output:
+  - platform: gpio
+    pin: GPIO45
+    id: pwr_hold
+  - platform: gpio
+    pin: GPIO46
+    id: pwr_lock
+  - platform: gpio
+    pin:
+      number: GPIO39
+      inverted: true
+    id: charge_enable
+  - platform: ledc
+    pin: GPIO48
+    id: buzzer_out
+
+rtttl:
+  id: buzzer
+  output: buzzer_out
+  gain: 0.6
+
+switch:
+  - platform: gpio
+    pin: GPIO42
+    id: touch_power
+    restore_mode: ALWAYS_ON
+    internal: true

@@ -1,0 +1,36 @@
+# One air conditioner for Home controls and the AC count. Vars: n (0-5, in the order shown), name, entity.
+esphome:
+  on_boot:
+    - priority: -50
+      then:
+        - lambda: |-
+            sticky::CFG.ac_name[${n}] = "${name}";
+            sticky::CFG.ac_id[${n}] = "${entity}";
+            sticky::CFG.ac_count = std::max(sticky::CFG.ac_count, ${n} + 1);
+
+sensor:
+  - platform: homeassistant
+    id: ac${n}_set
+    entity_id: ${entity}
+    attribute: temperature
+    internal: true
+    on_value: [ lambda: "sticky::S.ac_set[${n}] = x; id(need_partial) = true;" ]
+  - platform: homeassistant
+    id: ac${n}_now
+    entity_id: ${entity}
+    attribute: current_temperature
+    internal: true
+    on_value: [ lambda: "sticky::S.ac_now[${n}] = x; if (sticky::S.do_mode) id(need_partial) = true;" ]
+
+text_sensor:
+  - platform: homeassistant
+    id: ac${n}_state
+    entity_id: ${entity}
+    internal: true
+    on_value: [ lambda: "sticky::S.ac_state[${n}] = x; id(need_partial) = true;" ]
+  - platform: homeassistant
+    id: ac${n}_fan
+    entity_id: ${entity}
+    attribute: fan_mode
+    internal: true
+    on_value: [ lambda: "sticky::S.ac_fan[${n}] = x; if (sticky::S.do_mode) id(need_partial) = true;" ]

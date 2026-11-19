@@ -1,0 +1,13 @@
+{
+  "about": "Copy to history_topics.json (git-ignored) and change. Items matching a topic are picked first; higher weight wins. Patterns are Python regular expressions. Without a topics file the list is world events only.",
+  "topics": [
+    {"tag": "space", "weight": 4, "pattern": "\\bNASA\\b|\\bMoon\\b|spaceflight|astronaut|cosmonaut|satellite|\\bMars\\b"},
+    {"tag": "science", "weight": 3, "pattern": "Nobel Prize in (?:Physics|Chemistry|Physiology)|\\bdiscover|\\binvent|vaccine"},
+    {"tag": "music", "weight": 2, "pattern": "\\bcomposer\\b|\\bsymphony\\b|\\bopera\\b|\\bBeatles\\b"}
+  ],
+  "ignore": "",
+  "feasts": "^(?:New Year's Day|International Women's Day|Earth Day|World Environment Day|Human Rights Day)",
+  "days": {
+    "0101": ["Today", "New Year's Day", "feast"]
+  }
+}

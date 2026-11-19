@@ -1,0 +1,205 @@
+# Mac preview of the Sticky screens (ESPHome host + SDL). Not flashed to the device.
+substitutions:
+  build_path: .esphome/build/sticky-preview
+
+esphome:
+  name: sticky-preview
+  build_path: ${build_path}
+  includes:
+    - ../history_data.h
+    - ../sticky_ui.h
+  on_boot:
+    - priority: -100
+      then:
+        - lambda: |-
+            using namespace sticky;
+            F.clock = id(f_clock); F.huge = id(f_huge); F.big = id(f_big); F.mid = id(f_mid); F.lbl = id(f_lbl);
+            F.txt = id(f_txt); F.txtb = id(f_txtb); F.icon = id(f_icon); F.iconbig = id(f_iconbig);
+            F.sm = id(f_sm); PIC.land = id(etch_land); PIC.port = id(etch_port);
+            // example settings, the way packages/ac.yaml and packages/city.yaml fill them on the device
+            const char *acn[6] = {"Living", "Bedroom", "Kids", "Guest", "Kitchen", "Office"};
+            for (int i = 0; i < 6; i++) { CFG.ac_name[i] = acn[i]; CFG.ac_id[i] = std::string("climate.example_") + std::to_string(i); }
+            CFG.ac_count = 6;
+            const char *cn[5] = {"London", "New York", "Tokyo", "Sydney", "Berlin"};
+            const char *tz[5] = {"GMT0BST,M3.5.0/1,M10.5.0", "EST5EDT,M3.2.0,M11.1.0", "JST-9", "AEST-10AEDT,M10.1.0,M4.1.0/3", "CET-1CEST,M3.5.0,M10.5.0/3"};
+            for (int i = 0; i < 5; i++) { CFG.city_name[i] = cn[i]; CFG.city_tz[i] = tz[i]; }
+            CFG.city_count = 5; CFG.github = true; CFG.tv_label = "TV";
+            S.hourly = "12,29,47,11;13,29,48,15;14,28,51,17;15,28,48,20;16,28,49,22;17,27,50,21;18,27,52,19;19,27,51,16;20,26,49,16;21,26,49,15;22,25,52,13;23,25,54,11;";
+            S.birth = "1988-03-12";  // example only
+            S.wx_h = 47; S.wx_wind = 11; S.wx_t = 29;
+            S.gh_days = 366; S.gh_first_dow = 3; S.gh_total = 412; S.gh_doy = 1;
+            for (int i = 0; i < 366; i++) { int r = (i * 7919 + 13) % 100; S.gh_level[i] = r < 35 ? 0 : r < 60 ? 1 : r < 80 ? 2 : r < 93 ? 3 : 4; S.gh_count[i] = S.gh_level[i] * 3; }
+            S.room_t = 23.4; S.room_h = 48; S.batt = 78; S.on_charger = true;
+            S.lock_state = "locked";
+            S.ac_state[0] = "cool"; S.ac_state[1] = "cool"; S.ac_state[2] = "off"; S.ac_state[3] = "cool"; S.ac_state[4] = "off"; S.ac_state[5] = "off";
+            S.vacuum = "cleaning"; S.watering = true;
+            S.wx_cond = "partlycloudy"; S.wx_t = 27; S.wx_h = 53; S.wx_wind = 14;
+            S.forecast = "Wed|clear-night|26|25;Thu|sunny|29|22;Fri|sunny|29|20;Sat|exceptional|29|24;Sun|cloudy|28|22";
+            S.agenda = "T|07:30|Gym;T|15:30|School pickup;T|19:00|Dinner out;M|09:00|Dentist;M|All day|Bin day";
+            S.dish_state = "run"; S.dish_prog = 62; S.dish_finish = "2026-11-18T23:10:22+00:00";
+            S.tv_state = "playing"; S.tv_app = "Netflix"; S.tv_vol = 0.18;
+            S.timer_run = true; S.timer_total_s = 900; S.timer_left_s = 582; S.timer_ring_at = "08:25";
+            S.page_on[P_WIFI] = true;
+            S.reminders = "Buy milk and eggs|Call plumber about guest bath|Pick up dry cleaning|Renew passport|Water the plants on the roof terrace|Book car service";
+            float sets[6] = {24, 23, NAN, 25, 24, 25}, nows[6] = {25.5, 24, 27, 26, 28, 29};
+            const char *fans[6] = {"auto", "low", "auto", "medium", "auto", "auto"};
+            for (int i = 0; i < 6; i++) { S.ac_set[i] = sets[i]; S.ac_now[i] = nows[i]; S.ac_fan[i] = fans[i]; }
+            S.vac_batt = 100; S.vac_last = "2026-11-18T19:31:47+00:00"; S.vacuum = "docked";
+            S.dish_door = "closed"; S.dish_remote = true; S.dish_selected = "dishcare_dishwasher_program_eco_50";
+            S.wiz_prog = "dishcare_dishwasher_program_quick_65";
+            S.dish_opt[0] = "unavailable"; S.dish_opt[1] = "on"; S.dish_opt[2] = "off"; S.dish_opt[3] = "unavailable"; S.dish_opt[4] = "off";
+
+host:
+
+logger:
+  level: INFO
+
+time:
+  - platform: host
+    id: ha_time
+    timezone: Europe/London
+
+globals:
+  - id: step
+    type: int
+    initial_value: "0"
+
+image:
+  - file: ../art/etch_land.png
+    id: etch_land
+    type: BINARY
+    transparency: chroma_key
+  - file: ../art/etch_port.png
+    id: etch_port
+    type: BINARY
+    transparency: chroma_key
+
+qr_code:
+  - id: guest_qr
+    value: "WIFI:T:WPA;S:Home Guest;P:example-password;;"
+    ecc: MEDIUM
+
+font:
+  - file: "gfonts://Big Shoulders Display@800"
+    id: f_clock
+    size: 200
+    glyphs: "0123456789:-%°"
+  - file: "gfonts://Big Shoulders Display@800"
+    id: f_huge
+    size: 130
+    glyphs: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_abcdefghijklmnopqrstuvwxyz{|}~°·–’"
+  - file: "gfonts://Big Shoulders Display@800"
+    id: f_big
+    size: 66
+    glyphs: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_abcdefghijklmnopqrstuvwxyz{|}~°·–’"
+  - file: "gfonts://Big Shoulders Display@800"
+    id: f_mid
+    size: 46
+    glyphs: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_abcdefghijklmnopqrstuvwxyz{|}~°·–’"
+  - file: "gfonts://Big Shoulders Display@700"
+    id: f_lbl
+    size: 32
+    glyphs: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_abcdefghijklmnopqrstuvwxyz{|}~°·–’"
+  - file: "gfonts://Atkinson Hyperlegible@400"
+    id: f_txt
+    size: 28
+    glyphs: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_abcdefghijklmnopqrstuvwxyz{|}~°·–’"
+  - file: "gfonts://Atkinson Hyperlegible@400"
+    id: f_sm
+    size: 20
+    glyphs: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_abcdefghijklmnopqrstuvwxyz{|}~°·–’"
+  - file: "gfonts://Atkinson Hyperlegible@700"
+    id: f_txtb
+    size: 30
+    glyphs: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_abcdefghijklmnopqrstuvwxyz{|}~°·–’"
+  - file:
+      type: web
+      url: "https://raw.githubusercontent.com/Templarian/MaterialDesign-Webfont/v7.4.47/fonts/materialdesignicons-webfont.ttf"
+    id: f_icon
+    size: 40
+    glyphs: &mdi
+      - "\U000F033E"  # lock
+      - "\U000F0FC6"  # lock-open-variant
+      - "\U000F0717"  # snowflake
+      - "\U000F070D"  # robot-vacuum
+      - "\U000F058C"  # water
+      - "\U000F0AAC"  # dishwasher
+      - "\U000F072A"  # washing-machine
+      - "\U000F051B"  # timer-outline
+      - "\U000F07AE"  # cctv
+      - "\U000F0026"  # alert
+      - "\U000F040A"  # play
+      - "\U000F03E4"  # pause
+      - "\U000F04AD"  # skip-next
+      - "\U000F04AE"  # skip-previous
+      - "\U000F075D"  # volume-plus
+      - "\U000F075E"  # volume-minus
+      - "\U000F140B"  # lightning-bolt
+      - "\U000F05A9"  # wifi
+      - "\U000F0599"  # weather-sunny
+      - "\U000F0594"  # weather-night
+      - "\U000F0595"  # weather-partly-cloudy
+      - "\U000F0590"  # weather-cloudy
+      - "\U000F0591"  # weather-fog
+      - "\U000F0597"  # weather-rainy
+      - "\U000F0596"  # weather-pouring
+      - "\U000F0593"  # weather-lightning
+      - "\U000F059D"  # weather-windy
+      - "\U000F0598"  # weather-snowy
+      - "\U000F0F30"  # weather-hazy
+      - "\U000F02D6"  # help-circle (lock state unknown)
+      - "\U000F0741"  # gesture-tap
+      - "\U000F05E0"  # check-circle
+      - "\U000F0141"  # chevron-left
+      - "\U000F0415"  # plus
+      - "\U000F0374"  # minus
+      - "\U000F0425"  # power
+      - "\U000F02DC"  # home
+      - "\U000F04DB"  # stop
+      - "\U000F062E"  # tune
+      - "\U000F00ED"  # calendar
+      - "\U000F0150"  # clock-outline
+      - "\U000F0432"  # qrcode
+      - "\U000F0502"  # television
+      - "\U000F0756"  # format-list-checks
+      - "\U000F0130"  # checkbox-blank-circle-outline
+  - file:
+      type: web
+      url: "https://raw.githubusercontent.com/Templarian/MaterialDesign-Webfont/v7.4.47/fonts/materialdesignicons-webfont.ttf"
+    id: f_iconbig
+    size: 104
+    glyphs: *mdi
+
+display:
+  - platform: sdl
+    id: epd
+    update_interval: never
+    dimensions:
+      width: 800
+      height: 480
+    lambda: |-
+      sticky::draw(it, id(ha_time).now(), id(guest_qr), "Home Guest");
+
+interval:
+  - interval: 2s
+    then:
+      - lambda: |-
+          using namespace sticky;
+          // a tour of the screens for the README: landscape, then portrait. 0-13 Glance pages, 14+ Do screens, 40 alert
+          static const int land[20] = {P_TODAY, P_CAL, P_WX, P_FC, P_REM, P_HIST, P_YEAR, P_WORLD, P_LIFE, P_BIO, P_PLAY, P_TIMER,
+                                       P_WIFI, P_GH, 14 + D_TILES, 14 + D_ROOM, 14 + D_DOOR, 14 + D_DW1, 14 + D_VW2, 40};
+          static const int port[8] = {P_TODAY, P_CAL, P_WX, P_REM, 14 + D_TILES, 14 + D_ROOM, 14 + D_DW3, 14 + D_VAC};
+          int s = id(step) % 28;
+          bool is_land = s < 20;
+          id(epd).set_rotation(is_land ? esphome::display::DISPLAY_ROTATION_0_DEGREES : esphome::display::DISPLAY_ROTATION_90_DEGREES);
+          int k = is_land ? land[s] : port[s - 20];
+          S.alert = false; S.asleep = false; S.do_mode = false; S.ha_lost_at = "";
+          S.vwiz[0] = 2; S.vwiz[1] = 2; S.vwiz[2] = 1; S.vwiz[3] = 1;
+          int64_t t = id(ha_time).now().timestamp;
+          S.wx_at = t; S.gh_at = t;
+          if (k == 40) { S.alert = true; S.alert_kind = "camera"; S.alert_title = "Person · Driveway"; S.alert_detail = "Seen at 18:42"; }
+          else if (k < 14) S.page = k;
+          else { S.do_mode = true; S.do_screen = k - 14; S.room = 0; }
+          id(epd).update();
+          ESP_LOGI("preview", "STEP %d", s);
+          id(step)++;

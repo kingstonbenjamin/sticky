@@ -1,0 +1,49 @@
+# Your home settings for the Sticky. Copy this file to my-home.yaml (git-ignored) and change the values.
+substitutions:
+  device_name: sticky
+  friendly_name: Sticky
+  timezone: Europe/London
+  build_path: .esphome/build/sticky
+  # dotted picture behind the Today clock (black on transparent, 800x422 and 480x742); art/make_etch.py draws these
+  etch_land: art/etch_land.png
+  etch_port: art/etch_port.png
+  weather_entity: weather.forecast_home
+  lock_entity: lock.front_door
+  vacuum_entity: vacuum.robot_vacuum
+  vacuum_battery: sensor.robot_vacuum_battery_level
+  vacuum_last_clean: sensor.robot_vacuum_cleaning_history
+  vacuum_problem: binary_sensor.robot_vacuum_problem
+  vacuum_usual_label: usual settings
+  dishwasher_state: sensor.dishwasher_operation_state
+  dishwasher_progress: sensor.dishwasher_programme_progress
+  dishwasher_finish: sensor.dishwasher_programme_finish_time
+  dishwasher_door: sensor.dishwasher_door
+  dishwasher_selected: select.dishwasher_selected_programme
+  dishwasher_remote_start: binary_sensor.dishwasher_remote_start
+  dishwasher_opt_intensive: switch.dishwasher_intensive_zone
+  dishwasher_opt_speed: switch.dishwasher_vario_speed
+  dishwasher_opt_hygiene: switch.dishwasher_hygiene
+  dishwasher_opt_half: switch.dishwasher_half_load
+  dishwasher_opt_silence: switch.dishwasher_silence_on_demand
+  dishwasher_usual_program: dishcare_dishwasher_program_eco_50
+  washer_state: sensor.washing_machine_operation_state
+  washer_progress: sensor.washing_machine_programme_progress
+  washer_finish: sensor.washing_machine_programme_finish_time
+  tv_entity: media_player.living_room_tv
+  tv_label: TV
+  soundbar_entity: media_player.soundbar
+  soundbar_label: Soundbar
+  watering_1: binary_sensor.front_lawn_watering
+  watering_2: binary_sensor.back_lawn_watering
+  watering_3: binary_sensor.garden_watering
+
+# Up to 6 ACs (n 0-5) and 5 cities (n 0-4). Optional add-ons are commented out at the end.
+packages:
+  ac0: !include { file: packages/ac.yaml, vars: { n: 0, name: Living, entity: climate.living_room } }
+  ac1: !include { file: packages/ac.yaml, vars: { n: 1, name: Bedroom, entity: climate.bedroom } }
+  ac2: !include { file: packages/ac.yaml, vars: { n: 2, name: Office, entity: climate.office } }
+  city0: !include { file: packages/city.yaml, vars: { n: 0, name: London, tz: "GMT0BST,M3.5.0/1,M10.5.0" } }
+  city1: !include { file: packages/city.yaml, vars: { n: 1, name: New York, tz: "EST5EDT,M3.2.0,M11.1.0" } }
+  city2: !include { file: packages/city.yaml, vars: { n: 2, name: Tokyo, tz: "JST-9" } }
+  # github: !include { file: packages/github.yaml, vars: { github_user: your-github-name } }
+  # test: !include packages/test-actions.yaml

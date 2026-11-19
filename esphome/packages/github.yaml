@@ -1,0 +1,57 @@
+# Optional: GitHub contributions page. Var: github_user.
+# Sends the username to github-contributions-api.jogruber.de once a day (HTTPS, certificate checked).
+esphome:
+  on_boot:
+    - priority: -50
+      then:
+        - lambda: sticky::CFG.github = true;
+
+api:
+  on_client_connected:
+    - script.execute: github_daily
+
+http_request:
+  # WHY: checks the site's certificate against the ESP-IDF certificate bundle
+  verify_ssl: true
+  timeout: 15s
+
+interval:
+  # once an hour; github_daily only fetches when today's data is missing
+  - interval: 1h
+    then:
+      - script.execute: github_daily
+
+script:
+  - id: github_daily
+    mode: single
+    then:
+      - delay: 20s
+      - if:
+          condition:
+            lambda: |-
+              auto t = id(ha_time).now();
+              return sticky::S.page_on[sticky::P_GH] && (!t.is_valid() || sticky::S.gh_doy != t.day_of_year || sticky::S.gh_total < 0);
+          then:
+            - script.execute: github_fetch
+  - id: github_fetch
+    mode: single
+    then:
+      - http_request.get:
+          url: "https://github-contributions-api.jogruber.de/v4/${github_user}?y=last"
+          capture_response: true
+          max_response_buffer_size: 48000
+          on_response:
+            then:
+              - lambda: |-
+                  if (response->status_code == 200 && sticky::parse_github(body, id(ha_time).now())) {
+                    ESP_LOGI("github", "%d contributions over %d days", sticky::S.gh_total, sticky::S.gh_days);
+                  } else {
+                    sticky::S.gh_error = "GitHub not reachable (" + std::to_string(response->status_code) + ")";
+                    ESP_LOGW("github", "%s, %u bytes", sticky::S.gh_error.c_str(), (unsigned) body.size());
+                  }
+                  if (sticky::S.page == sticky::P_GH) id(need_partial) = true;
+          on_error:
+            then:
+              - lambda: |-
+                  sticky::S.gh_error = "GitHub not reachable";
+                  if (sticky::S.page == sticky::P_GH) id(need_partial) = true;

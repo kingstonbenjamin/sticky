@@ -1,0 +1,263 @@
+# Home Assistant side of the Sticky. Copy this file to config/packages/sticky.yaml and make sure
+# configuration.yaml has:   homeassistant:  packages: !include_dir_named packages
+# Entity ids match example-home.yaml; change both files together.
+# In Settings > Devices > ESPHome > Sticky > Configure, tick "Allow the device to perform Home Assistant actions".
+
+input_text:
+  # filled by the automations below, read by the Sticky
+  sticky_agenda: { name: Sticky agenda, max: 255 }
+  sticky_forecast: { name: Sticky forecast, max: 255 }
+  sticky_hourly: { name: Sticky hourly, max: 255 }
+  sticky_reminders: { name: Sticky reminders, max: 255 }
+  # set by you
+  sticky_calendars: { name: Sticky calendars, max: 255, initial: calendar.home }
+  sticky_birth_date: { name: Sticky birth date, max: 10, pattern: '^(\d{4}-\d{2}-\d{2})?$' }
+
+automation:
+  - id: sticky_agenda
+    alias: "Sticky: agenda"
+    description: "Every 15 min: today's and tomorrow's events from the calendars in input_text.sticky_calendars (comma separated)."
+    triggers:
+      - trigger: time_pattern
+        minutes: /15
+      - trigger: state
+        entity_id: input_text.sticky_calendars
+      - trigger: homeassistant
+        event: start
+    actions:
+      - variables:
+          cals: "{{ states('input_text.sticky_calendars').split(',') | map('trim') | select('match','^calendar\\.') | list }}"
+      - if:
+          - condition: template
+            value_template: "{{ cals | length == 0 }}"
+        then:
+          - action: input_text.set_value
+            target: { entity_id: input_text.sticky_agenda }
+            data: { value: none }
+        else:
+          - action: calendar.get_events
+            target: { entity_id: "{{ cals }}" }
+            data:
+              start_date_time: "{{ today_at('00:00') }}"
+              end_date_time: "{{ today_at('00:00') + timedelta(days=2) }}"
+            response_variable: ev
+          # one item per event, "T" (today) or "M" (tomorrow) | time or "All day" | title, joined with ";"
+          - action: input_text.set_value
+            target: { entity_id: input_text.sticky_agenda }
+            data:
+              value: >-
+                {%- set ns = namespace(items=[]) -%}{%- for k, v in ev.items() -%}{%- for e in v.events -%}{%- set ns.items = ns.items + [e] -%}{%- endfor -%}{%- endfor -%}{%- set today = now().date() | string -%}{%- set out = namespace(s='') -%}{%- for e in ns.items | sort(attribute='start') -%}{%- set allday = 'T' not in e.start -%}{%- set d = e.start[:10] if allday else (as_local(as_datetime(e.start)).date() | string) -%}{%- set item = ('T' if d == today else 'M') ~ '|' ~ ('All day' if allday else as_local(as_datetime(e.start)).strftime('%H:%M')) ~ '|' ~ (e.summary | replace('|','/') | replace(';',','))[:22] -%}{%- if (out.s ~ ';' ~ item) | length < 250 -%}{%- set out.s = (out.s ~ ';' ~ item) if out.s else item -%}{%- endif -%}{%- endfor -%}{{ out.s if out.s else 'empty' }}
+    mode: single
+
+  - id: sticky_forecast
+    alias: "Sticky: forecast"
+    description: "Every 30 min: 5-day forecast as 'Thu|sunny|31|22;...'."
+    triggers:
+      - trigger: time_pattern
+        minutes: /30
+      - trigger: homeassistant
+        event: start
+    actions:
+      - action: weather.get_forecasts
+        target: { entity_id: weather.forecast_home }
+        data: { type: daily }
+        response_variable: fc
+      - action: input_text.set_value
+        target: { entity_id: input_text.sticky_forecast }
+        data:
+          value: >-
+            {%- set ns = namespace(out=[]) -%}{%- for d in fc['weather.forecast_home'].forecast[:5] -%}{%- set ns.out = ns.out + [as_local(as_datetime(d.datetime)).strftime('%a') ~ '|' ~ d.condition ~ '|' ~ (d.temperature | round(0) | int) ~ '|' ~ ((d.templow if d.templow is defined else d.temperature) | round(0) | int)] -%}{%- endfor -%}{{ ns.out | join(';') }}
+    mode: single
+
+  - id: sticky_hourly_weather
+    alias: "Sticky: hourly weather"
+    description: "Next 12 hours for the Weather page: 'HH,temp,humidity,wind;' in local time."
+    triggers:
+      - trigger: time_pattern
+        minutes: /20
+      - trigger: homeassistant
+        event: start
+    actions:
+      - action: weather.get_forecasts
+        target: { entity_id: weather.forecast_home }
+        data: { type: hourly }
+        response_variable: f
+      - action: input_text.set_value
+        target: { entity_id: input_text.sticky_hourly }
+        data:
+          value: >-
+            {%- set ns = namespace(s='') -%}{%- for h in f['weather.forecast_home'].forecast[:12] -%}{%- set ns.s = ns.s ~ (as_local(as_datetime(h.datetime)).strftime('%H')) ~ ',' ~ (h.temperature | round(0) | int) ~ ',' ~ (h.humidity | round(0) | int) ~ ',' ~ (h.wind_speed | round(0) | int) ~ ';' -%}{%- endfor -%}{{ ns.s }}
+    mode: single
+
+  - id: sticky_reminders
+    alias: "Sticky: reminders"
+    description: "Open items of a to-do list for the Reminders page, joined with |."
+    triggers:
+      - trigger: state
+        entity_id: todo.shopping_list
+      - trigger: time_pattern
+        minutes: /5
+      - trigger: homeassistant
+        event: start
+    actions:
+      - action: todo.get_items
+        target: { entity_id: todo.shopping_list }
+        data: { status: needs_action }
+        response_variable: r
+      - action: input_text.set_value
+        target: { entity_id: input_text.sticky_reminders }
+        data:
+          value: >-
+            {%- set ns = namespace(s='') -%}{%- for i in r['todo.shopping_list']['items'] -%}{%- set t = i.summary | replace('|','/') | truncate(40, true, '.') -%}{%- if (ns.s ~ '|' ~ t) | length <= 255 -%}{%- set ns.s = ns.s ~ ('|' if ns.s else '') ~ t -%}{%- endif -%}{%- endfor -%}{{ ns.s if ns.s else 'none' }}
+    mode: queued
+
+script:
+  # Everything the Sticky's Do side can ask for. Anything not listed here is refused and logged,
+  # so the Sticky can never do more than this script allows.
+  sticky_do:
+    alias: "Sticky: do"
+    icon: mdi:gesture-tap
+    mode: queued
+    max: 10
+    fields:
+      what: { description: "ac_power, ac_temp, ac_mode, ac_fan, all_off, lock, unlock, vac_start, vac_start_custom, vac_dock, vac_custom, dish_select, dish_option, dish_start, dish_stop, rem_done" }
+      target: { description: "climate entity (ACs) or option key (dish_option)" }
+      value: { description: "temperature, mode, fan, program, on/off, 'program|HH:MM' or 'program|now', reminder title, 'mode|suction|mop|route'" }
+    variables:
+      # the dishwasher programs the Sticky may pick (Home Connect integration values)
+      programs: [dishcare_dishwasher_program_eco_50, dishcare_dishwasher_program_auto_2, dishcare_dishwasher_program_quick_45, dishcare_dishwasher_program_quick_65, dishcare_dishwasher_program_intensiv_70, dishcare_dishwasher_program_glas_40, dishcare_dishwasher_program_night_wash, dishcare_dishwasher_program_pre_rinse, dishcare_dishwasher_program_machine_care]
+    sequence:
+      - choose:
+          - conditions: "{{ what == 'ac_power' and target is match('climate\\.') }}"
+            sequence:
+              - action: "{{ 'climate.turn_off' if not is_state(target, 'off') else 'climate.turn_on' }}"
+                target: { entity_id: "{{ target }}" }
+          - conditions: "{{ what == 'ac_temp' and target is match('climate\\.') }}"
+            sequence:
+              - action: climate.set_temperature
+                target: { entity_id: "{{ target }}" }
+                data: { temperature: "{{ [[value | float(24), 16] | max, 30] | min }}" }
+          - conditions: "{{ what == 'ac_mode' and target is match('climate\\.') and value in ['cool','dry','fan_only','auto'] }}"
+            sequence:
+              - action: climate.set_hvac_mode
+                target: { entity_id: "{{ target }}" }
+                data: { hvac_mode: "{{ value }}" }
+          - conditions: "{{ what == 'ac_fan' and target is match('climate\\.') and value in ['low','medium','high','auto'] }}"
+            sequence:
+              - action: climate.set_fan_mode
+                target: { entity_id: "{{ target }}" }
+                data: { fan_mode: "{{ value }}" }
+          - conditions: "{{ what == 'all_off' }}"
+            sequence:
+              - action: climate.turn_off
+                target: { entity_id: all }
+          - conditions: "{{ what == 'lock' }}"
+            sequence:
+              - action: lock.lock
+                target: { entity_id: lock.front_door }
+          # the Sticky asks "Unlock?" on screen first
+          - conditions: "{{ what == 'unlock' }}"
+            sequence:
+              - action: lock.unlock
+                target: { entity_id: lock.front_door }
+          # usual vacuum run: set each option only if it differs, then start (Dreame integration values)
+          - conditions: "{{ what == 'vac_start' }}"
+            sequence:
+              - repeat:
+                  for_each:
+                    - [select.robot_vacuum_cleaning_mode, mopping_after_sweeping]
+                    - [select.robot_vacuum_suction_level, standard]
+                    - [select.robot_vacuum_mop_pad_humidity, moist]
+                    - [select.robot_vacuum_cleaning_route, standard]
+                  sequence:
+                    - if: "{{ states(repeat.item[0]) not in [repeat.item[1], 'unavailable', 'unknown'] }}"
+                      then:
+                        - action: select.select_option
+                          target: { entity_id: "{{ repeat.item[0] }}" }
+                          data: { option: "{{ repeat.item[1] }}" }
+                        - delay: { seconds: 1 }
+              - action: vacuum.start
+                target: { entity_id: vacuum.robot_vacuum }
+          # the vacuum wizard: "mode|suction|mop|route"
+          - conditions: >-
+              {%- set p = value.split('|') -%}{{ what == 'vac_start_custom' and p | length == 4 and p[0] in ['sweeping','mopping','sweeping_and_mopping','mopping_after_sweeping'] and p[1] in ['quiet','standard','strong','turbo'] and p[2] in ['slightly_dry','moist','wet'] and p[3] in ['quick','standard','intensive','deep'] }}
+            sequence:
+              - variables:
+                  p: "{{ value.split('|') }}"
+              - repeat:
+                  for_each: "{{ [['select.robot_vacuum_cleaning_mode', p[0]], ['select.robot_vacuum_suction_level', p[1]], ['select.robot_vacuum_mop_pad_humidity', p[2]], ['select.robot_vacuum_cleaning_route', p[3]]] }}"
+                  sequence:
+                    - if: "{{ states(repeat.item[0]) not in [repeat.item[1], 'unavailable', 'unknown'] }}"
+                      then:
+                        - action: select.select_option
+                          target: { entity_id: "{{ repeat.item[0] }}" }
+                          data: { option: "{{ repeat.item[1] }}" }
+                        - delay: { seconds: 1 }
+              - action: vacuum.start
+                target: { entity_id: vacuum.robot_vacuum }
+          - conditions: "{{ what == 'vac_dock' }}"
+            sequence:
+              - action: vacuum.return_to_base
+                target: { entity_id: vacuum.robot_vacuum }
+          # a saved shortcut from the vacuum's app
+          - conditions: "{{ what == 'vac_custom' }}"
+            sequence:
+              - action: button.press
+                target: { entity_id: button.robot_vacuum_shortcut_0 }
+          - conditions: "{{ what == 'dish_stop' }}"
+            sequence:
+              - action: button.press
+                target: { entity_id: button.dishwasher_stop_programme }
+          - conditions: "{{ what == 'dish_select' and value in programs }}"
+            sequence:
+              - action: select.select_option
+                target: { entity_id: select.dishwasher_selected_programme }
+                data: { option: "{{ value }}" }
+          - conditions: "{{ what == 'dish_option' and target in ['intensive_zone','vario_speed','hygiene','half_load','silence_on_demand'] and value in ['on','off'] }}"
+            sequence:
+              - action: "{{ 'switch.turn_on' if value == 'on' else 'switch.turn_off' }}"
+                target: { entity_id: "switch.dishwasher_{{ target }}" }
+          # start now or at HH:MM; needs Remote start switched on at the dishwasher
+          - conditions:
+              - "{{ what == 'dish_start' and value.split('|')[0] in programs }}"
+              - condition: state
+                entity_id: binary_sensor.dishwasher_remote_start
+                state: "on"
+            sequence:
+              - variables:
+                  prog: "{{ value.split('|')[0] }}"
+                  at: "{{ value.split('|')[1] if '|' in value else 'now' }}"
+              - if: "{{ at is match('^\\d\\d:\\d\\d$') }}"
+                then:
+                  - variables:
+                      secs: "{%- set t = today_at(at) -%}{%- set t = t if t > now() else t + timedelta(days=1) -%}{{ (t - now()).total_seconds() | int }}"
+                  - action: number.set_value
+                    target: { entity_id: number.dishwasher_start_in_relative }
+                    data: { value: "{{ secs }}" }
+                  - delay: { seconds: 2 }
+              - action: select.select_option
+                target: { entity_id: select.dishwasher_active_programme }
+                data: { option: "{{ prog }}" }
+          # tick off a reminder on the Reminders page
+          - conditions: "{{ what == 'rem_done' and value | length > 0 }}"
+            sequence:
+              - action: todo.update_item
+                target: { entity_id: todo.shopping_list }
+                data: { item: "{{ value }}", status: completed }
+        default:
+          - action: system_log.write
+            data:
+              level: warning
+              logger: sticky
+              message: "Sticky asked for an unknown or blocked action: {{ what }} {{ target }} {{ value }}"
+
+# Optional: push to your phone when the Sticky's battery is low (change the notify action).
+#  - id: sticky_battery_low
+#    alias: "Sticky: battery low"
+#    triggers:
+#      - trigger: numeric_state
+#        entity_id: sensor.sticky_battery
+#        below: 10
+#    actions:
+#      - action: notify.mobile_app_your_phone
+#        data: { title: Sticky battery low, message: "Sticky is at {{ states('sensor.sticky_battery') | int }}%." }

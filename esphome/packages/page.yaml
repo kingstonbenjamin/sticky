@@ -1,0 +1,17 @@
+# One Glance page's on/off switch (shown on the Sticky tab in HA). Vars: key, name, icon, page, restore.
+esphome:
+  on_boot:
+    - priority: -50
+      then:
+        - lambda: sticky::S.page_on[sticky::${page}] = id(sw_${key}).state;
+
+switch:
+  - platform: template
+    id: sw_${key}
+    name: ${name}
+    icon: ${icon}
+    optimistic: true
+    restore_mode: ${restore}
+    entity_category: config
+    on_turn_on: [ lambda: "sticky::S.page_on[sticky::${page}] = true;" ]
+    on_turn_off: [ lambda: "sticky::S.page_on[sticky::${page}] = false; if (sticky::S.page == sticky::${page}) { sticky::S.page = sticky::next_page(sticky::S.page, 1); id(need_full) = true; }" ]

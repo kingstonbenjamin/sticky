@@ -1,0 +1,1311 @@
+# reTerminal Sticky (E1005) as a Home Assistant screen.
+# Build this file. Your own home (entity ids, rooms, cities, add-ons) goes in my-home.yaml:
+# copy example-home.yaml to my-home.yaml and edit it. Layouts live in sticky_ui.h.
+substitutions:
+  guest_ssid: !secret guest_wifi_ssid
+  guest_password: !secret guest_wifi_password
+
+packages:
+  hardware: !include hardware.yaml
+  home: !include my-home.yaml
+  page_today: !include { file: packages/page.yaml, vars: { key: today, name: "Show Today", icon: "mdi:calendar-today", page: P_TODAY, restore: RESTORE_DEFAULT_ON } }
+  page_cal: !include { file: packages/page.yaml, vars: { key: cal, name: "Show Calendar", icon: "mdi:calendar", page: P_CAL, restore: RESTORE_DEFAULT_ON } }
+  page_wx: !include { file: packages/page.yaml, vars: { key: wx, name: "Show Weather", icon: "mdi:weather-partly-cloudy", page: P_WX, restore: RESTORE_DEFAULT_ON } }
+  page_rem: !include { file: packages/page.yaml, vars: { key: rem, name: "Show Reminders", icon: "mdi:format-list-checks", page: P_REM, restore: RESTORE_DEFAULT_ON } }
+  page_fc: !include { file: packages/page.yaml, vars: { key: fc, name: "Show Forecast", icon: "mdi:calendar-week", page: P_FC, restore: RESTORE_DEFAULT_ON } }
+  page_hist: !include { file: packages/page.yaml, vars: { key: hist, name: "Show History", icon: "mdi:history", page: P_HIST, restore: RESTORE_DEFAULT_ON } }
+  page_year: !include { file: packages/page.yaml, vars: { key: year, name: "Show Year", icon: "mdi:calendar-clock", page: P_YEAR, restore: RESTORE_DEFAULT_ON } }
+  page_world: !include { file: packages/page.yaml, vars: { key: world, name: "Show World clock", icon: "mdi:earth", page: P_WORLD, restore: RESTORE_DEFAULT_ON } }
+  page_gh: !include { file: packages/page.yaml, vars: { key: gh, name: "Show GitHub", icon: "mdi:github", page: P_GH, restore: RESTORE_DEFAULT_ON } }
+  page_life: !include { file: packages/page.yaml, vars: { key: life, name: "Show Life in weeks", icon: "mdi:account-clock", page: P_LIFE, restore: RESTORE_DEFAULT_ON } }
+  page_bio: !include { file: packages/page.yaml, vars: { key: bio, name: "Show Biorhythm", icon: "mdi:heart-pulse", page: P_BIO, restore: RESTORE_DEFAULT_ON } }
+  page_timer: !include { file: packages/page.yaml, vars: { key: timer, name: "Show Kitchen timer", icon: "mdi:timer-outline", page: P_TIMER, restore: RESTORE_DEFAULT_ON } }
+  page_wifi: !include { file: packages/page.yaml, vars: { key: wifi, name: "Show Guest Wi-Fi", icon: "mdi:qrcode", page: P_WIFI, restore: RESTORE_DEFAULT_OFF } }
+  page_play: !include { file: packages/page.yaml, vars: { key: play, name: "Show Now playing", icon: "mdi:television-play", page: P_PLAY, restore: RESTORE_DEFAULT_ON } }
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+  # WHY: a build folder inside a git repo can confuse ESP-IDF's version lookup; my-home.yaml can move it
+  build_path: ${build_path}
+  includes:
+    - history_data.h
+    - sticky_ui.h
+    - gt911_poll.h
+  on_boot:
+    - priority: 800
+      then:
+        # WHY: note which button woke it, so that press only wakes the screen instead of also turning the page
+        - lambda: |-
+            auto cause = esp_sleep_get_wakeup_cause();
+            if (cause == ESP_SLEEP_WAKEUP_EXT1) id(wake_mask) = (uint32_t) esp_sleep_get_ext1_wakeup_status();
+            id(woke_by_timer) = cause == ESP_SLEEP_WAKEUP_TIMER;
+    - priority: -100
+      then:
+        - lambda: |-
+            sticky::F.clock = id(f_clock);
+            sticky::F.huge = id(f_huge);
+            sticky::F.big = id(f_big);
+            sticky::F.mid = id(f_mid);
+            sticky::F.lbl = id(f_lbl);
+            sticky::F.txt = id(f_txt);
+            sticky::F.txtb = id(f_txtb);
+            sticky::F.icon = id(f_icon);
+            sticky::F.iconbig = id(f_iconbig);
+            sticky::F.sm = id(f_sm);
+            sticky::PIC.land = id(etch_land);
+            sticky::PIC.port = id(etch_port);
+            sticky::CFG.tv_label = "${tv_label}";
+            sticky::CFG.soundbar_label = "${soundbar_label}";
+            sticky::CFG.vac_usual = "${vacuum_usual_label}";
+            sticky::CFG.dish_usual = "${dishwasher_usual_program}";
+            sticky::S.dark = id(sw_dark).state;
+            int rot = 0, base = 0;
+            if (sticky::restore_state(rot, base)) id(base_rot) = base;
+            else sticky::S.page = sticky::next_page(sticky::P_COUNT - 1, +1);
+            id(last_activity) = millis();
+        - pcf8563.read_time: rtc_time
+        - script.execute: apply_rotation
+        - lambda: |-
+            id(need_full) = true;
+            sticky_touch::T.begin(id(i2c_touch));
+            id(touch_status).publish_state(sticky_touch::T.status);
+
+logger:
+  # WHY: DEBUG keeps the start-up hardware report; the chatty sensor/text lines are turned down below
+  level: DEBUG
+  logs:
+    sensor: INFO
+    text_sensor: INFO
+    binary_sensor: INFO
+    homeassistant.sensor: INFO
+    homeassistant.text_sensor: INFO
+    homeassistant.binary_sensor: INFO
+  hardware_uart: USB_SERIAL_JTAG
+
+wifi:
+  # WHY: skip the network scan on wake; join the saved network straight away
+  fast_connect: true
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "Sticky Setup"
+    password: !secret fallback_password
+
+captive_portal:
+
+api:
+  encryption:
+    key: !secret api_key
+  actions:
+    - action: show_alert
+      variables:
+        kind: string
+        title: string
+        detail: string
+      then:
+        - script.execute:
+            id: raise_alert
+            kind: !lambda return kind;
+            title: !lambda return title;
+            detail: !lambda return detail;
+    - action: clear_alert
+      then:
+        - lambda: |-
+            sticky::S.alert = false;
+            id(need_full) = true;
+    - action: beep
+      variables:
+        tune: string
+      then:
+        - script.execute:
+            id: play_tune
+            kind: !lambda return tune;
+    - action: start_timer
+      variables:
+        minutes: int
+      then:
+        - script.execute:
+            id: timer_cmd
+            value: !lambda return minutes;
+    # Opens a Do screen by name (Tiles, Home, AC room, Door, Vacuum, Dishwasher, ...) or a page inside Do
+    - action: show_do
+      variables:
+        screen: string
+      then:
+        - lambda: |-
+            sticky::S.alert = false;
+            sticky::open_do(sticky::D_TILES);
+            for (int d = 0; d < sticky::D_PAGE; d++)
+              if (screen == sticky::DO_NAMES[d]) sticky::S.do_screen = d;
+            for (int p = 0; p < sticky::P_COUNT; p++)
+              if (screen == sticky::PAGE_NAMES[p]) { sticky::S.do_screen = sticky::D_PAGE; sticky::S.do_page = p; }
+            id(last_activity) = millis();
+            id(need_full) = true;
+    - action: show_page
+      variables:
+        page: string
+      then:
+        - lambda: |-
+            for (int p = 0; p < sticky::P_COUNT; p++)
+              if (page == sticky::PAGE_NAMES[p]) sticky::S.page = p;
+            sticky::S.do_mode = false;
+            id(last_activity) = millis();
+            id(need_full) = true;
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+globals:
+  - id: need_full
+    type: bool
+    initial_value: "false"
+  - id: need_partial
+    type: bool
+    initial_value: "false"
+  - id: last_draw
+    type: uint32_t
+    initial_value: "0"
+  - id: last_activity
+    type: uint32_t
+    initial_value: "0"
+  - id: last_rotate
+    type: uint32_t
+    initial_value: "0"
+  - id: cur_rot
+    type: int
+    initial_value: "0"
+  - id: imu_rot
+    type: float
+    initial_value: "NAN"
+  - id: base_rot
+    type: int
+    # WHY: keep the last way up through restarts, for when it boots lying flat and can't tell
+    restore_value: true
+    initial_value: "0"
+  - id: touch_map
+    type: int
+    restore_value: true
+    initial_value: "5"
+  - id: cal_rx1
+    type: int
+    initial_value: "0"
+  - id: cal_ry1
+    type: int
+    initial_value: "0"
+  - id: wake_mask
+    type: uint32_t
+    initial_value: "0"
+  - id: woke_by_timer
+    type: bool
+    initial_value: "false"
+  - id: ign_ai
+    type: bool
+    initial_value: "false"
+  - id: ign_up
+    type: bool
+    initial_value: "false"
+  - id: ign_down
+    type: bool
+    initial_value: "false"
+  - id: going_to_sleep
+    type: bool
+    initial_value: "false"
+  - id: media_target
+    type: std::string
+    initial_value: '"${tv_entity}"'
+
+time:
+  - platform: homeassistant
+    id: ha_time
+    timezone: ${timezone}
+    on_time_sync:
+      - pcf8563.write_time: rtc_time
+    on_time:
+      - seconds: 0
+        then:
+          - lambda: if (!sticky::S.asleep) id(need_partial) = true;
+  - platform: pcf8563
+    id: rtc_time
+    i2c_id: i2c_main
+    address: 0x51
+    timezone: ${timezone}
+    update_interval: never
+
+# ---------------- the Sticky's own sensors ----------------
+sensor:
+  - platform: sht4x
+    i2c_id: i2c_main
+    update_interval: 60s
+    temperature:
+      name: Temperature
+      id: room_t
+      filters:
+        - sliding_window_moving_average: { window_size: 3, send_every: 1 }
+      on_value:
+        - lambda: sticky::S.room_t = x;
+    humidity:
+      name: Humidity
+      id: room_h
+      on_value:
+        - lambda: sticky::S.room_h = x;
+  - platform: bq27220
+    i2c_id: i2c_main
+    update_interval: 60s
+    voltage:
+      name: Battery voltage
+      entity_category: diagnostic
+    current:
+      name: Battery current
+      entity_category: diagnostic
+      on_value:
+        - lambda: sticky::S.charging = x > 0.005f;
+    battery_level:
+      name: Battery
+      id: batt
+      on_value:
+        - lambda: |-
+            sticky::S.batt = x;
+    temperature:
+      name: Battery temperature
+      entity_category: diagnostic
+    time_to_empty:
+      name: Battery time left
+      entity_category: diagnostic
+    state_of_health:
+      name: Battery health
+      entity_category: diagnostic
+  - platform: motion
+    type: orientation
+    name: Orientation
+    entity_category: diagnostic
+    filters:
+      # WHY: the sensor says "unknown" while lying flat; keep the last real reading instead
+      - lambda: "if (std::isnan(x)) return {}; return x;"
+      - or:
+          - delta: 45
+          - throttle: 120s
+    on_value:
+      - lambda: id(imu_rot) = x;
+      - script.execute: apply_rotation
+  - platform: wifi_signal
+    name: Wi-Fi signal
+    update_interval: 120s
+    entity_category: diagnostic
+  - platform: uptime
+    name: Uptime
+    entity_category: diagnostic
+
+  # ---------------- from Home Assistant ----------------
+  - platform: homeassistant
+    id: ha_in_1
+    entity_id: ${weather_entity}
+    attribute: temperature
+    internal: true
+    on_value:
+      - lambda: sticky::S.wx_t = x; sticky::stamp(sticky::S.wx_at, id(ha_time).now()); id(need_partial) = true;
+  - platform: homeassistant
+    id: ha_in_2
+    entity_id: ${weather_entity}
+    attribute: humidity
+    internal: true
+    on_value:
+      - lambda: sticky::S.wx_h = x;
+  - platform: homeassistant
+    id: ha_in_3
+    entity_id: ${weather_entity}
+    attribute: wind_speed
+    internal: true
+    on_value:
+      - lambda: sticky::S.wx_wind = x;
+  - platform: homeassistant
+    id: ha_in_4
+    entity_id: ${dishwasher_progress}
+    internal: true
+    on_value:
+      - lambda: sticky::S.dish_prog = x; id(need_partial) = true;
+  - platform: homeassistant
+    id: ha_in_5
+    entity_id: ${washer_progress}
+    internal: true
+    on_value:
+      - lambda: sticky::S.wash_prog = x; id(need_partial) = true;
+  - platform: homeassistant
+    id: ha_in_6
+    entity_id: ${tv_entity}
+    attribute: volume_level
+    internal: true
+    on_value:
+      - lambda: sticky::S.tv_vol = x; if (sticky::S.page == sticky::P_PLAY) id(need_partial) = true;
+  - platform: homeassistant
+    id: ha_in_7
+    entity_id: ${soundbar_entity}
+    attribute: volume_level
+    internal: true
+    on_value:
+      - lambda: sticky::S.sb_vol = x; if (sticky::S.page == sticky::P_PLAY) id(need_partial) = true;
+
+  - platform: homeassistant
+    id: ha_in_39
+    entity_id: ${vacuum_battery}
+    internal: true
+    on_value: [ lambda: "sticky::S.vac_batt = x; if (sticky::S.do_mode) id(need_partial) = true;" ]
+
+motion:
+  - platform: lsm6ds
+    id: imu
+    i2c_id: i2c_main
+    update_interval: 2s
+
+text_sensor:
+  - platform: template
+    name: Page
+    id: page_name
+    entity_category: diagnostic
+    update_interval: never
+  - platform: template
+    name: Last touch
+    id: last_touch
+    entity_category: diagnostic
+  - platform: template
+    name: Touch status
+    id: touch_status
+    entity_category: diagnostic
+  - platform: wifi_info
+    ip_address:
+      name: IP address
+      entity_category: diagnostic
+
+  - platform: homeassistant
+    id: ha_in_8
+    entity_id: ${lock_entity}
+    internal: true
+    on_value:
+      - lambda: sticky::S.lock_state = x; id(need_partial) = true;
+  - platform: homeassistant
+    id: ha_in_15
+    entity_id: ${vacuum_entity}
+    internal: true
+    on_value:
+      - lambda: sticky::S.vacuum = x; id(need_partial) = true;
+  - platform: homeassistant
+    id: ha_in_16
+    entity_id: ${weather_entity}
+    internal: true
+    on_value:
+      - lambda: sticky::S.wx_cond = x; sticky::stamp(sticky::S.wx_at, id(ha_time).now()); id(need_partial) = true;
+  - platform: homeassistant
+    id: ha_in_17
+    entity_id: input_text.sticky_forecast
+    internal: true
+    on_value:
+      - lambda: sticky::S.forecast = x; id(need_partial) = true;
+  - platform: homeassistant
+    id: ha_in_18
+    entity_id: input_text.sticky_agenda
+    internal: true
+    on_value:
+      - lambda: sticky::S.agenda = x; id(need_partial) = true;
+  - platform: homeassistant
+    id: ha_in_19
+    entity_id: ${dishwasher_state}
+    internal: true
+    on_value:
+      - lambda: |-
+          std::string old = sticky::S.dish_state;
+          sticky::S.dish_state = x;
+          id(need_partial) = true;
+          bool was_running = old == "run" || old == "pause" || old == "actionrequired" || old == "delayedstart";
+          if (x == "finished" && was_running && id(sw_alert_dish).state) {
+            char buf[32];
+            auto t = id(ha_time).now();
+            snprintf(buf, sizeof(buf), "Finished %02d:%02d", t.hour, t.minute);
+            id(raise_alert).execute("dishwasher", "Dishes done", buf);
+          }
+  - platform: homeassistant
+    id: ha_in_20
+    entity_id: ${dishwasher_finish}
+    internal: true
+    on_value:
+      - lambda: sticky::S.dish_finish = x;
+  - platform: homeassistant
+    id: ha_in_21
+    entity_id: ${washer_state}
+    internal: true
+    on_value:
+      - lambda: |-
+          std::string old = sticky::S.wash_state;
+          sticky::S.wash_state = x;
+          id(need_partial) = true;
+          bool was_running = old == "run" || old == "pause" || old == "actionrequired" || old == "delayedstart";
+          if (x == "finished" && was_running && id(sw_alert_wash).state) {
+            char buf[32];
+            auto t = id(ha_time).now();
+            snprintf(buf, sizeof(buf), "Finished %02d:%02d", t.hour, t.minute);
+            id(raise_alert).execute("washing", "Washing done", buf);
+          }
+  - platform: homeassistant
+    id: ha_in_22
+    entity_id: ${washer_finish}
+    internal: true
+    on_value:
+      - lambda: sticky::S.wash_finish = x;
+  - platform: homeassistant
+    id: ha_in_23
+    entity_id: ${tv_entity}
+    internal: true
+    on_value:
+      - lambda: |-
+          bool before = sticky::playing();
+          sticky::S.tv_state = x;
+          if (before != sticky::playing() || sticky::S.page == sticky::P_PLAY) id(need_partial) = true;
+          if (!sticky::playing() && sticky::S.page == sticky::P_PLAY) { sticky::S.page = sticky::P_TODAY; id(need_full) = true; }
+  - platform: homeassistant
+    id: ha_in_24
+    entity_id: ${tv_entity}
+    attribute: app_name
+    internal: true
+    on_value:
+      - lambda: sticky::S.tv_app = x; if (sticky::S.page == sticky::P_PLAY) id(need_partial) = true;
+  - platform: homeassistant
+    id: ha_in_25
+    entity_id: ${tv_entity}
+    attribute: media_title
+    internal: true
+    on_value:
+      - lambda: sticky::S.tv_title = x; if (sticky::S.page == sticky::P_PLAY) id(need_partial) = true;
+  - platform: homeassistant
+    id: ha_in_26
+    entity_id: ${soundbar_entity}
+    internal: true
+    on_value:
+      - lambda: |-
+          sticky::S.sb_state = x;
+          if (!sticky::playing() && sticky::S.page == sticky::P_PLAY) { sticky::S.page = sticky::P_TODAY; id(need_full) = true; }
+
+  - platform: homeassistant
+    id: ha_in_46
+    entity_id: ${vacuum_last_clean}
+    internal: true
+    on_value: [ lambda: "sticky::S.vac_last = x; if (sticky::S.do_mode) id(need_partial) = true;" ]
+  - platform: homeassistant
+    id: ha_in_47
+    entity_id: ${dishwasher_door}
+    internal: true
+    on_value: [ lambda: "sticky::S.dish_door = x; if (sticky::S.do_mode) id(need_partial) = true;" ]
+  - platform: homeassistant
+    id: ha_in_48
+    entity_id: ${dishwasher_selected}
+    internal: true
+    on_value: [ lambda: "sticky::S.dish_selected = x; if (sticky::S.do_mode) id(need_partial) = true;" ]
+  - platform: homeassistant
+    id: ha_in_49
+    entity_id: input_text.sticky_reminders
+    internal: true
+    on_value: [ lambda: "sticky::S.reminders = x; id(need_partial) = true;" ]
+  - platform: homeassistant
+    id: ha_in_50
+    entity_id: ${dishwasher_opt_intensive}
+    internal: true
+    on_value: [ lambda: "sticky::S.dish_opt[0] = x; if (sticky::S.do_mode) id(need_partial) = true;" ]
+  - platform: homeassistant
+    id: ha_in_51
+    entity_id: ${dishwasher_opt_speed}
+    internal: true
+    on_value: [ lambda: "sticky::S.dish_opt[1] = x; if (sticky::S.do_mode) id(need_partial) = true;" ]
+  - platform: homeassistant
+    id: ha_in_52
+    entity_id: ${dishwasher_opt_hygiene}
+    internal: true
+    on_value: [ lambda: "sticky::S.dish_opt[2] = x; if (sticky::S.do_mode) id(need_partial) = true;" ]
+  - platform: homeassistant
+    id: ha_in_53
+    entity_id: ${dishwasher_opt_half}
+    internal: true
+    on_value: [ lambda: "sticky::S.dish_opt[3] = x; if (sticky::S.do_mode) id(need_partial) = true;" ]
+  - platform: homeassistant
+    id: ha_in_54
+    entity_id: ${dishwasher_opt_silence}
+    internal: true
+    on_value: [ lambda: "sticky::S.dish_opt[4] = x; if (sticky::S.do_mode) id(need_partial) = true;" ]
+
+  - platform: homeassistant
+    id: ha_hourly
+    entity_id: input_text.sticky_hourly
+    internal: true
+    on_value: [ lambda: "sticky::S.hourly = x; sticky::stamp(sticky::S.wx_at, id(ha_time).now()); if (sticky::S.page == sticky::P_WX) id(need_partial) = true;" ]
+  - platform: homeassistant
+    id: ha_birth
+    entity_id: input_text.sticky_birth_date
+    internal: true
+    on_value: [ lambda: "sticky::S.birth = x; id(need_partial) = true;" ]
+
+binary_sensor:
+  - platform: gpio
+    name: On charger
+    id: on_charger
+    pin: GPIO9
+    on_state:
+      - lambda: |-
+          sticky::S.on_charger = x;
+          id(last_activity) = millis();
+          id(need_partial) = true;
+  - platform: homeassistant
+    entity_id: ${watering_1}
+    id: water1
+    internal: true
+    on_state: [ lambda: "sticky::S.watering = id(water1).state || id(water2).state || id(water3).state; id(need_partial) = true;" ]
+  - platform: homeassistant
+    entity_id: ${watering_2}
+    id: water2
+    internal: true
+    on_state: [ lambda: "sticky::S.watering = id(water1).state || id(water2).state || id(water3).state; id(need_partial) = true;" ]
+  - platform: homeassistant
+    entity_id: ${watering_3}
+    id: water3
+    internal: true
+    on_state: [ lambda: "sticky::S.watering = id(water1).state || id(water2).state || id(water3).state; id(need_partial) = true;" ]
+  - platform: homeassistant
+    entity_id: ${dishwasher_remote_start}
+    id: dish_remote
+    internal: true
+    on_state: [ lambda: "sticky::S.dish_remote = x; if (sticky::S.do_mode) id(need_partial) = true;" ]
+  - platform: homeassistant
+    entity_id: ${vacuum_problem}
+    id: vac_problem
+    internal: true
+    on_state:
+      - lambda: |-
+          bool was = sticky::S.vacuum_problem;
+          sticky::S.vacuum_problem = x;
+          if (x && !was && id(sw_alert_vac).state) id(raise_alert).execute("vacuum", "Vacuum needs help", "Check the robot");
+
+  # Buttons: AI (top), Up, Down. Short press flips pages; all presses also go to HA as events.
+  - platform: gpio
+    id: btn_ai
+    name: AI button
+    pin: { number: GPIO4, mode: INPUT_PULLUP, inverted: true, allow_other_uses: true }
+    on_press:
+      - lambda: |-
+          id(last_activity) = millis();
+          id(woke_by_timer) = false;
+          if ((id(wake_mask) & (1u << 4)) && millis() < 2000) id(ign_ai) = true;
+          id(wake_mask) &= ~(1u << 4);
+    on_multi_click:
+      - timing: [ ON for at most 0.8s, OFF for at least 0.4s ]
+        then:
+          - lambda: |-
+              if (id(ign_ai)) { id(ign_ai) = false; return; }
+              id(ev_ai).trigger("press");
+              sticky::press_ai();
+              id(need_full) = true;
+      - timing: [ ON for at most 0.8s, OFF for at most 0.4s, ON for at most 0.8s, OFF for at least 0.2s ]
+        then: [ lambda: "if (id(ign_ai)) { id(ign_ai) = false; return; } id(ev_ai).trigger(\"double_press\");" ]
+      - timing: [ ON for at least 1s ]
+        then: [ lambda: "if (id(ign_ai)) { id(ign_ai) = false; return; } id(ev_ai).trigger(\"long_press\");" ]
+  - platform: gpio
+    id: btn_up
+    name: Up button
+    pin: { number: GPIO5, mode: INPUT_PULLUP, inverted: true, allow_other_uses: true }
+    on_press:
+      - lambda: |-
+          id(last_activity) = millis();
+          id(woke_by_timer) = false;
+          if ((id(wake_mask) & (1u << 5)) && millis() < 2000) id(ign_up) = true;
+          id(wake_mask) &= ~(1u << 5);
+    on_multi_click:
+      - timing: [ ON for at most 0.8s, OFF for at least 0.4s ]
+        then:
+          - lambda: |-
+              if (id(ign_up)) { id(ign_up) = false; return; }
+              id(ev_up).trigger("press");
+              sticky::press_step(-1);
+              id(need_full) = true;
+      - timing: [ ON for at most 0.8s, OFF for at most 0.4s, ON for at most 0.8s, OFF for at least 0.2s ]
+        then: [ lambda: "if (id(ign_up)) { id(ign_up) = false; return; } id(ev_up).trigger(\"double_press\");" ]
+      - timing: [ ON for at least 1s ]
+        then: [ lambda: "if (id(ign_up)) { id(ign_up) = false; return; } id(ev_up).trigger(\"long_press\");" ]
+  - platform: gpio
+    id: btn_down
+    name: Down button
+    pin: { number: GPIO6, mode: INPUT_PULLUP, inverted: true, allow_other_uses: true }
+    on_press:
+      - lambda: |-
+          id(last_activity) = millis();
+          id(woke_by_timer) = false;
+          if ((id(wake_mask) & (1u << 6)) && millis() < 2000) id(ign_down) = true;
+          id(wake_mask) &= ~(1u << 6);
+    on_multi_click:
+      - timing: [ ON for at most 0.8s, OFF for at least 0.4s ]
+        then:
+          - lambda: |-
+              if (id(ign_down)) { id(ign_down) = false; return; }
+              id(ev_down).trigger("press");
+              sticky::press_step(+1);
+              id(need_full) = true;
+      - timing: [ ON for at most 0.8s, OFF for at most 0.4s, ON for at most 0.8s, OFF for at least 0.2s ]
+        then: [ lambda: "if (id(ign_down)) { id(ign_down) = false; return; } id(ev_down).trigger(\"double_press\");" ]
+      - timing: [ ON for at least 1s ]
+        then: [ lambda: "if (id(ign_down)) { id(ign_down) = false; return; } id(ev_down).trigger(\"long_press\");" ]
+
+event:
+  - platform: template
+    id: ev_ai
+    name: AI button press
+    event_types: [press, double_press, long_press]
+  - platform: template
+    id: ev_up
+    name: Up button press
+    event_types: [press, double_press, long_press]
+  - platform: template
+    id: ev_down
+    name: Down button press
+    event_types: [press, double_press, long_press]
+
+# ---------------- settings shown in Home Assistant ----------------
+switch:
+  - platform: template
+    id: sw_dark
+    name: Dark mode
+    icon: mdi:theme-light-dark
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    entity_category: config
+    on_turn_on: [ lambda: "sticky::S.dark = true; id(need_full) = true;" ]
+    on_turn_off: [ lambda: "sticky::S.dark = false; id(need_full) = true;" ]
+  - platform: template
+    id: sw_alert_dish
+    name: Alert when dishwasher is done
+    icon: mdi:dishwasher
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+  - platform: template
+    id: sw_alert_wash
+    name: Alert when washing is done
+    icon: mdi:washing-machine
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+  - platform: template
+    id: sw_alert_cam
+    name: Alert for camera
+    icon: mdi:cctv
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+  - platform: template
+    id: sw_alert_vac
+    name: Alert when vacuum is stuck
+    icon: mdi:robot-vacuum
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+  - platform: template
+    id: sw_beep
+    name: Beep for alerts
+    icon: mdi:volume-high
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+  - platform: template
+    id: sw_quiet
+    name: Quiet 22-07
+    icon: mdi:sleep
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+  - platform: template
+    id: sw_keep_awake
+    name: Stay awake on battery
+    icon: mdi:coffee
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    entity_category: config
+  - platform: template
+    id: sw_test_battery
+    name: Act as if on battery
+    icon: mdi:battery-alert
+    optimistic: true
+    restore_mode: ALWAYS_OFF
+    entity_category: diagnostic
+
+select:
+  - platform: template
+    id: sel_orient
+    name: Way up
+    icon: mdi:screen-rotation
+    optimistic: true
+    restore_value: true
+    options: ["Follow how it's held", "Always landscape", "Always portrait"]
+    initial_option: "Follow how it's held"
+    entity_category: config
+    on_value: [ script.execute: apply_rotation ]
+  - platform: template
+    id: sel_rotate
+    name: Rotate pages on charger
+    icon: mdi:autorenew
+    optimistic: true
+    restore_value: true
+    options: ["Every 1 min", "Every 3 min", "Every 10 min", "Off"]
+    initial_option: "Every 3 min"
+    entity_category: config
+  - platform: template
+    id: sel_flip
+    name: Upside-down fix
+    icon: mdi:phone-rotate-portrait
+    optimistic: true
+    restore_value: true
+    options: ["None", "Portrait", "Landscape", "Both"]
+    initial_option: "None"
+    entity_category: config
+    on_value: [ script.execute: apply_rotation ]
+
+number:
+  - platform: template
+    id: num_wake_every
+    name: Wake every on battery
+    icon: mdi:alarm
+    unit_of_measurement: min
+    optimistic: true
+    restore_value: true
+    min_value: 5
+    max_value: 120
+    step: 5
+    initial_value: 15
+    entity_category: config
+  - platform: template
+    id: num_awake_time
+    name: Awake time on battery
+    icon: mdi:timer-sand
+    unit_of_measurement: s
+    optimistic: true
+    restore_value: true
+    min_value: 20
+    max_value: 300
+    step: 10
+    initial_value: 60
+    entity_category: config
+
+button:
+  - platform: template
+    name: Refresh screen
+    icon: mdi:refresh
+    on_press: [ lambda: "id(need_full) = true; id(last_activity) = millis();" ]
+  - platform: template
+    name: Clear alert
+    icon: mdi:bell-off
+    on_press: [ lambda: "sticky::S.alert = false; id(need_full) = true;" ]
+  - platform: template
+    name: Test beep
+    icon: mdi:bullhorn
+    entity_category: diagnostic
+    on_press:
+      - rtttl.play: "test:d=8,o=6,b=180:c,e,g"
+  - platform: template
+    name: Set up touch
+    icon: mdi:gesture-tap
+    on_press:
+      - lambda: |-
+          sticky::S.alert = false;
+          sticky::S.touch_setup = 1;
+          id(last_activity) = millis();
+          id(woke_by_timer) = false;
+          id(need_full) = true;
+  - platform: template
+    name: Test touch (15 dots)
+    icon: mdi:target
+    entity_category: diagnostic
+    on_press:
+      - lambda: |-
+          sticky::S.alert = false;
+          sticky::S.touch_setup = 0;
+          sticky::S.touch_test = 1;
+          sticky::S.tt_drawn = 0;
+          id(last_activity) = millis();
+          id(woke_by_timer) = false;
+          id(need_full) = true;
+  - platform: template
+    name: Restart touch
+    icon: mdi:gesture-tap-hold
+    entity_category: diagnostic
+    on_press:
+      - lambda: sticky_touch::T.begin(id(i2c_touch));
+  - platform: template
+    name: Show test alert
+    icon: mdi:bell-ring
+    entity_category: diagnostic
+    on_press:
+      - script.execute:
+          id: raise_alert
+          kind: "dishwasher"
+          title: "Test alert"
+          detail: "Tap the screen to clear"
+  - platform: restart
+    name: Restart
+    entity_category: diagnostic
+
+deep_sleep:
+  id: ds
+  sleep_duration: 15min
+  esp32_ext1_wakeup:
+    pins:
+      - pin: { number: GPIO4, allow_other_uses: true }
+      - pin: { number: GPIO5, allow_other_uses: true }
+      - pin: { number: GPIO6, allow_other_uses: true }
+    mode: ANY_LOW
+
+# ---------------- behaviour ----------------
+script:
+  - id: raise_alert
+    mode: queued
+    parameters:
+      kind: string
+      title: string
+      detail: string
+    then:
+      - lambda: |-
+          if (kind == "camera" && !id(sw_alert_cam).state) return;
+          sticky::S.alert = true;
+          sticky::S.alert_kind = kind;
+          sticky::S.alert_title = title;
+          sticky::S.alert_detail = detail;
+          id(last_activity) = millis();
+          id(need_full) = true;
+      - script.execute:
+          id: play_tune
+          kind: !lambda return kind;
+
+  - id: play_tune
+    mode: restart
+    parameters:
+      kind: string
+    then:
+      - lambda: |-
+          if (!id(sw_beep).state && kind != "timer" && kind != "test") return;
+          auto t = id(ha_time).now();
+          bool night = t.is_valid() && (t.hour >= 22 || t.hour < 7);
+          if (night && id(sw_quiet).state && kind != "timer" && kind != "test") return;
+          std::string tune = "beep:d=8,o=6,b=200:e,p,e";
+          if (kind == "dishwasher") tune = "dish:d=8,o=6,b=180:c,e,g,p,c,e,g";
+          else if (kind == "washing") tune = "wash:d=8,o=5,b=160:g,c6,e6,p,g,c6,e6";
+          else if (kind == "timer") tune = "timer:d=16,o=6,b=200:c,p,c,p,c,p,c,8p,c,p,c,p,c,p,c,8p,c,p,c,p,c,p,c";
+          else if (kind == "camera") tune = "cam:d=8,o=6,b=200:e,p,e,p,e";
+          else if (kind == "vacuum") tune = "vac:d=8,o=5,b=160:c6,g,c6";
+          else if (kind == "test") tune = "test:d=8,o=6,b=180:c,e,g";
+          id(buzzer).play(tune);
+
+  - id: apply_rotation
+    mode: queued
+    then:
+      - lambda: |-
+          int mode = id(sel_orient).active_index().value_or(0);
+          int flip = id(sel_flip).active_index().value_or(0);
+          float o = id(imu_rot);
+          int base = id(base_rot);
+          if (mode == 1) base = 0;
+          else if (mode == 2) base = 90;
+          else if (!std::isnan(o)) base = sticky::rot_from_motion((int) lroundf(o / 90.f) * 90);
+          id(base_rot) = base;
+          int rot = sticky::apply_flip(base, flip);
+          if (rot != id(cur_rot) || id(last_draw) == 0) {
+            id(cur_rot) = rot;
+            id(epd).set_rotation((esphome::display::DisplayRotation) rot);
+            id(need_full) = true;
+          }
+
+  - id: handle_touch
+    mode: queued
+    parameters:
+      rx: int
+      ry: int
+    then:
+      - lambda: |-
+          auto &S = sticky::S;
+          id(last_activity) = millis();
+          id(woke_by_timer) = false;
+          int W = id(epd).get_width(), H = id(epd).get_height();
+          char buf[100];
+          if (S.touch_setup == 1) {
+            id(cal_rx1) = rx; id(cal_ry1) = ry;
+            S.touch_setup = 2;
+            id(need_full) = true;
+            snprintf(buf, sizeof(buf), "setup dot 1: raw %d,%d", rx, ry);
+            id(last_touch).publish_state(buf);
+            return;
+          }
+          if (S.touch_setup == 2) {
+            int rxs[2] = {id(cal_rx1), rx}, rys[2] = {id(cal_ry1), ry};
+            int err = 0;
+            int m = sticky::calibrate_touch(id(cur_rot), rxs, rys, W, H, err);
+            S.touch_setup = 0;
+            S.alert = true;
+            if (err < 160) {
+              id(touch_map) = m;
+              S.alert_kind = "ok"; S.alert_title = "Touch is set up"; S.alert_detail = "Tap anywhere to close";
+            } else {
+              S.alert_kind = "touch"; S.alert_title = "Touch setup missed"; S.alert_detail = "Try again: Set up touch in HA";
+            }
+            snprintf(buf, sizeof(buf), "setup dot 2: raw %d,%d, map %d, miss %d px", rx, ry, m, err);
+            id(last_touch).publish_state(buf);
+            id(need_full) = true;
+            return;
+          }
+          int x, y;
+          sticky::touch_to_screen(id(touch_map), id(cur_rot), rx, ry, x, y);
+          if (S.touch_test) {
+            // WHY: a tap before the next dot is on screen (or a double tap) would be scored against the wrong dot;
+            // the panel needs about a second after drawing before the new dot is really visible
+            if (S.tt_drawn != S.touch_test || millis() - S.tt_at < 1000 || millis() - S.tt_shown_at < 1500) return;
+            S.tt_at = millis();
+            if (S.touch_test > sticky::TT_N) { S.touch_test = 0; id(need_full) = true; return; }
+            int i = S.touch_test - 1, tx, ty;
+            sticky::test_target(i, W, H, tx, ty);
+            S.tt_miss[i] = (int) lroundf(hypotf(x - tx, y - ty));
+            snprintf(buf, sizeof(buf), "test dot %d/15 (turned %d): aim %d,%d got %d,%d miss %d", S.touch_test,
+                     id(cur_rot), tx, ty, x, y, S.tt_miss[i]);
+            id(last_touch).publish_state(buf);
+            S.touch_test++;
+            id(need_partial) = true;
+            return;
+          }
+          snprintf(buf, sizeof(buf), "raw %d,%d -> %d,%d (turned %d)", rx, ry, x, y, id(cur_rot));
+          id(last_touch).publish_state(buf);
+          if (S.asleep) return;
+          id(tap_at).execute(x, y);
+
+  # A tap at a screen point (from the touch chip, or sent by HA's test action "tap")
+  - id: tap_at
+    mode: queued
+    parameters:
+      x: int
+      y: int
+    then:
+      - lambda: |-
+          id(last_activity) = millis();
+          auto t = sticky::on_tap(x, y, id(epd).get_width(), id(epd).get_height());
+          if (t.kind == 1 || t.kind == 5) id(need_full) = true;
+          else if (t.kind == 6) { id(ha_do).execute(t.what, t.target, t.val); id(need_full) = true; }
+          else if (t.kind == 3) id(media_cmd).execute(t.value);
+          else if (t.kind == 4) id(timer_cmd).execute(t.value);
+
+  # Do-side actions run in Home Assistant's "Sticky: do" script (same steps as Inkhouse)
+  - id: ha_do
+    mode: queued
+    parameters:
+      what: string
+      target: string
+      val: string
+    then:
+      - homeassistant.action:
+          action: script.sticky_do
+          data:
+            what: !lambda return what;
+            target: !lambda return target;
+            value: !lambda return val;
+
+  - id: media_cmd
+    mode: queued
+    parameters:
+      cmd: int
+    then:
+      - lambda: |-
+          bool tv = !(sticky::S.tv_state.empty() || sticky::S.tv_state == "off" || sticky::S.tv_state == "unavailable" || sticky::S.tv_state == "unknown");
+          id(media_target) = tv ? "${tv_entity}" : "${soundbar_entity}";
+      - if:
+          condition: { lambda: "return cmd == 1;" }
+          then: [ homeassistant.action: { action: media_player.media_previous_track, data: { entity_id: !lambda "return id(media_target);" } } ]
+      - if:
+          condition: { lambda: "return cmd == 2;" }
+          then: [ homeassistant.action: { action: media_player.media_play_pause, data: { entity_id: !lambda "return id(media_target);" } } ]
+      - if:
+          condition: { lambda: "return cmd == 3;" }
+          then: [ homeassistant.action: { action: media_player.media_next_track, data: { entity_id: !lambda "return id(media_target);" } } ]
+      - if:
+          condition: { lambda: "return cmd == 4;" }
+          then: [ homeassistant.action: { action: media_player.volume_down, data: { entity_id: !lambda "return id(media_target);" } } ]
+      - if:
+          condition: { lambda: "return cmd == 5;" }
+          then: [ homeassistant.action: { action: media_player.volume_up, data: { entity_id: !lambda "return id(media_target);" } } ]
+
+  - id: timer_cmd
+    mode: queued
+    parameters:
+      value: int
+    then:
+      - lambda: |-
+          auto &S = sticky::S;
+          auto now_ms = millis();
+          if (value > 0) {
+            S.timer_total_s = value * 60; S.timer_left_s = S.timer_total_s;
+            S.timer_end_ms = now_ms + S.timer_total_s * 1000; S.timer_run = true; S.timer_paused = false;
+            S.page = sticky::P_TIMER;
+          } else if (value == -1) {
+            if (S.timer_run) { S.timer_end_ms += 60000; S.timer_total_s += 60; }
+            else if (S.timer_paused) { S.timer_left_s += 60; S.timer_total_s += 60; }
+            else { S.timer_total_s = 60; S.timer_left_s = 60; S.timer_end_ms = now_ms + 60000; S.timer_run = true; }
+          } else if (value == -2) {
+            if (S.timer_run) { S.timer_left_s = (S.timer_end_ms - now_ms) / 1000; S.timer_run = false; S.timer_paused = true; }
+            else if (S.timer_paused) { S.timer_end_ms = now_ms + S.timer_left_s * 1000; S.timer_run = true; S.timer_paused = false; }
+          } else if (value == -3) {
+            S.timer_run = false; S.timer_paused = false; S.timer_left_s = 0; S.timer_total_s = 0;
+          }
+          if (S.timer_run) {
+            auto t = id(ha_time).now();
+            if (t.is_valid()) {
+              int m = t.hour * 60 + t.minute + (int) ((S.timer_end_ms - now_ms) / 1000 + t.second) / 60;
+              char b[8]; snprintf(b, sizeof(b), "%02d:%02d", (m / 60) % 24, m % 60);
+              S.timer_ring_at = b;
+            }
+          }
+          id(need_partial) = true;
+
+  - id: go_sleep
+    mode: single
+    then:
+      - lambda: |-
+          id(going_to_sleep) = true;
+          sticky::S.asleep = true;
+          auto t = id(ha_time).now();
+          if (!t.is_valid()) t = id(rtc_time).now();
+          char b[8];
+          if (t.is_valid()) snprintf(b, sizeof(b), "%d:%02d", t.hour, t.minute); else snprintf(b, sizeof(b), "--:--");
+          sticky::S.asleep_at = b;
+          id(sticky_redraw).execute(true);
+      - delay: 1s
+      - wait_until:
+          condition:
+            not:
+              epaper_spi.is_updating: epd
+          timeout: 25s
+      - lambda: |-
+          id(ds).set_sleep_duration((uint32_t) id(num_wake_every).state * 60000);
+          // WHY: keep the battery power latch and button pull-ups alive while the chip sleeps
+          for (gpio_num_t p : {GPIO_NUM_4, GPIO_NUM_5, GPIO_NUM_6}) {
+            rtc_gpio_pullup_en(p);
+            rtc_gpio_pulldown_dis(p);
+          }
+          gpio_hold_en(GPIO_NUM_45);
+          gpio_hold_en(GPIO_NUM_46);
+          gpio_deep_sleep_hold_en();
+          sticky::S.asleep = false;
+          sticky::S.do_mode = false;
+          sticky::save_state(id(cur_rot), id(base_rot));
+      - deep_sleep.enter: ds
+
+  - id: sticky_redraw
+    mode: queued
+    parameters:
+      full: bool
+    then:
+      - lambda: |-
+          if (full) id(epd).request_full_update();
+          id(epd).update();
+          id(last_draw) = millis();
+
+interval:
+  # Screen updates, kitchen timer, page rotation and sleep, checked once a second
+  - interval: 1s
+    then:
+      - lambda: |-
+          auto &S = sticky::S;
+          uint32_t now = millis();
+          // kitchen timer
+          if (S.timer_run) {
+            int32_t left_ms = (int32_t) (S.timer_end_ms - now);
+            uint32_t left = left_ms > 0 ? (left_ms + 999) / 1000 : 0;
+            if (left != S.timer_left_s) {
+              S.timer_left_s = left;
+              if (S.page == sticky::P_TIMER && !S.alert && (left % 10 == 0 || left <= 10)) id(need_partial) = true;
+            }
+            if (left == 0) {
+              S.timer_run = false;
+              id(raise_alert).execute("timer", "Timer done", (std::to_string(S.timer_total_s / 60) + " min are up").c_str());
+            }
+          }
+          bool on_batt = !id(on_charger).state || id(sw_test_battery).state;
+          // page rotation, only on the charger and 2 min after the last touch or button
+          int rsel = id(sel_rotate).active_index().value_or(1);
+          uint32_t every = rsel == 0 ? 60000 : rsel == 1 ? 180000 : rsel == 2 ? 600000 : 0;
+          // Do goes back to Glance after 5 minutes untouched
+          if (S.do_mode && now - id(last_activity) > 300000) { S.do_mode = false; id(need_full) = true; }
+          if (!on_batt && every && !S.alert && !S.do_mode && !S.timer_run &&
+              now - id(last_rotate) > every && now - id(last_activity) > 120000) {
+            int np = sticky::next_page(S.page, +1);
+            id(last_rotate) = now;
+            if (np != S.page) { S.page = np; id(need_full) = true; }
+          }
+          if (S.page != sticky::P_TODAY && !sticky::page_available(S.page)) { S.page = sticky::next_page(S.page, +1); id(need_full) = true; }
+          // the page dots go away a few seconds after the page changed
+          if (S.dots_drawn && now - S.dots_ms >= sticky::DOTS_MS) id(need_partial) = true;
+          // WHY: only Home Assistant subscribes to states; a log viewer connecting and leaving must not count as HA going away
+          bool ha = esphome::api::global_api_server->is_connected_with_state_subscription();
+          if (ha != S.ha_ok) {
+            S.ha_ok = ha;
+            auto t = id(rtc_time).now();
+            char b[8];
+            snprintf(b, sizeof(b), "%d:%02d", t.is_valid() ? t.hour : 0, t.is_valid() ? t.minute : 0);
+            S.ha_lost_at = ha || !t.is_valid() ? "" : b;
+            id(need_partial) = true;
+          }
+          // report the page to HA when it changes
+          std::string pn = sticky::page_label();
+          if (pn != id(page_name).state) id(page_name).publish_state(pn);
+          // the wake-up press is only ignored right after waking
+          if (now > 4000) { id(ign_ai) = false; id(ign_up) = false; id(ign_down) = false; id(wake_mask) = 0; }
+          // touch setup gives up after 90 s without a tap
+          if (S.touch_setup && now - id(last_activity) > 90000) { S.touch_setup = 0; id(need_full) = true; }
+          if (S.touch_test && now - id(last_activity) > 120000) { S.touch_test = 0; id(need_full) = true; }
+          // sleep on battery; a timed wake (nobody pressing anything) only stays up long enough to refresh
+          if (id(going_to_sleep)) return;
+          uint32_t awake_ms = id(woke_by_timer) ? 25000 : (uint32_t) id(num_awake_time).state * 1000;
+          if (on_batt && !id(sw_keep_awake).state && !S.timer_run && !S.touch_setup && !S.touch_test &&
+              now - id(last_activity) > awake_ms && now > 15000) {
+            id(go_sleep).execute();
+          }
+  # Screen drawing, checked often so a press shows quickly
+  - interval: 200ms
+    then:
+      - lambda: |-
+          if (id(going_to_sleep)) return;
+          uint32_t now = millis();
+          bool busy = id(epd).is_updating();
+          if (!busy && id(need_full)) {
+            id(need_full) = false; id(need_partial) = false;
+            id(sticky_redraw).execute(true);
+          } else if (!busy && id(need_partial) && now - id(last_draw) > 3000) {
+            id(need_partial) = false;
+            id(sticky_redraw).execute(false);
+          }
+  # Touch chip readout for HA while testing
+  - interval: 3s
+    then:
+      - lambda: |-
+          std::string t = sticky_touch::T.summary();
+          if (t != id(touch_status).state) id(touch_status).publish_state(t);
+  # Touch chip, read about 30 times a second
+  - interval: 30ms
+    then:
+      - lambda: |-
+          int rx, ry;
+          if (sticky_touch::T.poll(rx, ry)) id(handle_touch).execute(rx, ry);
+
+
+image:
+  - file: ${etch_land}
+    id: etch_land
+    type: BINARY
+    transparency: chroma_key
+  - file: ${etch_port}
+    id: etch_port
+    type: BINARY
+    transparency: chroma_key
+
+qr_code:
+  - id: guest_qr
+    value: "WIFI:T:WPA;S:${guest_ssid};P:${guest_password};;"
+    ecc: MEDIUM
+
+font:
+  - file: "gfonts://Big Shoulders Display@800"
+    id: f_clock
+    size: 200
+    glyphs: "0123456789:-%°"
+  - file: "gfonts://Big Shoulders Display@800"
+    id: f_huge
+    size: 130
+    glyphs: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_abcdefghijklmnopqrstuvwxyz{|}~°·–’"
+  - file: "gfonts://Big Shoulders Display@800"
+    id: f_big
+    size: 66
+    glyphs: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_abcdefghijklmnopqrstuvwxyz{|}~°·–’"
+  - file: "gfonts://Big Shoulders Display@800"
+    id: f_mid
+    size: 46
+    glyphs: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_abcdefghijklmnopqrstuvwxyz{|}~°·–’"
+  - file: "gfonts://Big Shoulders Display@700"
+    id: f_lbl
+    size: 32
+    glyphs: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_abcdefghijklmnopqrstuvwxyz{|}~°·–’"
+  - file: "gfonts://Atkinson Hyperlegible@400"
+    id: f_txt
+    size: 28
+    glyphs: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_abcdefghijklmnopqrstuvwxyz{|}~°·–’"
+  - file: "gfonts://Atkinson Hyperlegible@400"
+    id: f_sm
+    size: 20
+    glyphs: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_abcdefghijklmnopqrstuvwxyz{|}~°·–’"
+  - file: "gfonts://Atkinson Hyperlegible@700"
+    id: f_txtb
+    size: 30
+    glyphs: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_abcdefghijklmnopqrstuvwxyz{|}~°·–’"
+  - file:
+      type: web
+      url: "https://raw.githubusercontent.com/Templarian/MaterialDesign-Webfont/v7.4.47/fonts/materialdesignicons-webfont.ttf"
+    id: f_icon
+    size: 40
+    glyphs: &mdi
+      - "\U000F033E"  # lock
+      - "\U000F0FC6"  # lock-open-variant
+      - "\U000F0717"  # snowflake
+      - "\U000F070D"  # robot-vacuum
+      - "\U000F058C"  # water
+      - "\U000F0AAC"  # dishwasher
+      - "\U000F072A"  # washing-machine
+      - "\U000F051B"  # timer-outline
+      - "\U000F07AE"  # cctv
+      - "\U000F0026"  # alert
+      - "\U000F040A"  # play
+      - "\U000F03E4"  # pause
+      - "\U000F04AD"  # skip-next
+      - "\U000F04AE"  # skip-previous
+      - "\U000F075D"  # volume-plus
+      - "\U000F075E"  # volume-minus
+      - "\U000F140B"  # lightning-bolt
+      - "\U000F05A9"  # wifi
+      - "\U000F0599"  # weather-sunny
+      - "\U000F0594"  # weather-night
+      - "\U000F0595"  # weather-partly-cloudy
+      - "\U000F0590"  # weather-cloudy
+      - "\U000F0591"  # weather-fog
+      - "\U000F0597"  # weather-rainy
+      - "\U000F0596"  # weather-pouring
+      - "\U000F0593"  # weather-lightning
+      - "\U000F059D"  # weather-windy
+      - "\U000F0598"  # weather-snowy
+      - "\U000F0F30"  # weather-hazy
+      - "\U000F02D6"  # help-circle (lock state unknown)
+      - "\U000F0741"  # gesture-tap
+      - "\U000F05E0"  # check-circle
+      - "\U000F0141"  # chevron-left
+      - "\U000F0415"  # plus
+      - "\U000F0374"  # minus
+      - "\U000F0425"  # power
+      - "\U000F02DC"  # home
+      - "\U000F04DB"  # stop
+      - "\U000F062E"  # tune
+      - "\U000F00ED"  # calendar
+      - "\U000F0150"  # clock-outline
+      - "\U000F0432"  # qrcode
+      - "\U000F0502"  # television
+      - "\U000F0756"  # format-list-checks
+      - "\U000F0130"  # checkbox-blank-circle-outline
+  - file:
+      type: web
+      url: "https://raw.githubusercontent.com/Templarian/MaterialDesign-Webfont/v7.4.47/fonts/materialdesignicons-webfont.ttf"
+    id: f_iconbig
+    size: 104
+    glyphs: *mdi
+
+display:
+  - platform: epaper_spi
+    id: epd
+    model: seeed-reterminal-sticky
+    spi_id: epaper_bus
+    update_interval: never
+    full_update_every: 20
+    lambda: |-
+      auto t = id(ha_time).now();
+      if (!t.is_valid()) t = id(rtc_time).now();
+      sticky::draw(it, t, id(guest_qr), "${guest_ssid}");

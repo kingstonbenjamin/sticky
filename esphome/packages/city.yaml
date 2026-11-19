@@ -1,0 +1,9 @@
+# One World clock row. Vars: n (0-4), name, tz (POSIX time zone string, daylight saving included).
+esphome:
+  on_boot:
+    - priority: -50
+      then:
+        - lambda: |-
+            sticky::CFG.city_name[${n}] = "${name}";
+            sticky::CFG.city_tz[${n}] = "${tz}";
+            sticky::CFG.city_count = std::max(sticky::CFG.city_count, ${n} + 1);
