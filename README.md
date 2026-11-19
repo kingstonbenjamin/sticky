@@ -9,6 +9,8 @@ The AI button switches sides. Do goes back to Glance on its own after 5 minutes.
 
 ![Today, Weather, Calendar, Reminders, Do tiles and the dishwasher wizard](docs/overview.png)
 
+**[Try the demo](https://kingstonbenjamin.github.io/sticky/)**: press the buttons and tap the screen edges, like on the real Sticky.
+
 It runs on ESPHome, talks to Home Assistant over its encrypted API, sleeps on battery and wakes on a button press or every few minutes to refresh.
 
 ## Screens

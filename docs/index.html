@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sticky</title>
+<meta name="description" content="Home Assistant firmware for the Seeed reTerminal E1005 e-ink screen: calm Glance pages and touch Do controls.">
+<style>
+  :root { --paper:#f3f1ea; --ink:#111; --muted:#5f5b53; --bezel:#2b2b2a; --bezel-edge:#454543; --glass:#fbfaf6; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --paper:#151514; --ink:#ece9e1; --muted:#a8a296; --bezel:#3a3a38; --bezel-edge:#5a5a57; }
+  }
+  :root[data-theme="dark"] { --paper:#151514; --ink:#ece9e1; --muted:#a8a296; --bezel:#3a3a38; --bezel-edge:#5a5a57; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--paper); color:var(--ink); font:17px/1.55 Palatino, "Book Antiqua", Georgia, serif; padding:40px 16px 70px; }
+  main { max-width:980px; margin:0 auto; }
+  h1 { font:600 54px/1 Futura, "Century Gothic", "Trebuchet MS", sans-serif; letter-spacing:-.02em; margin:0 0 10px; }
+  h2 { font:600 15px Futura, "Century Gothic", sans-serif; letter-spacing:.14em; text-transform:uppercase; margin:48px 0 14px; }
+  .lead { font-size:21px; max-width:46ch; margin:0 0 22px; }
+  .links { display:flex; flex-wrap:wrap; gap:10px; margin:0 0 30px; }
+  .links a { font:600 14px Futura, "Century Gothic", sans-serif; letter-spacing:.1em; text-transform:uppercase; color:var(--ink); text-decoration:none; border:3px solid var(--ink); border-radius:26px; padding:11px 20px; }
+  .links a.main { background:var(--ink); color:var(--paper); }
+
+  /* ---- the device ---- */
+  .stage { display:flex; flex-direction:column; align-items:center; gap:18px; }
+  .device { position:relative; background:var(--bezel); border:2px solid var(--bezel-edge); border-radius:26px; padding:30px 30px 30px; box-shadow:0 18px 40px rgba(0,0,0,.18); width:min(100%, 860px); transition:width .3s; }
+  .device.port { width:min(100%, 540px); }
+  .screen { position:relative; width:100%; aspect-ratio:800/480; background:var(--glass); border-radius:4px; overflow:hidden; cursor:pointer; }
+  .device.port .screen { aspect-ratio:480/800; }
+  .screen img { position:absolute; inset:0; width:100%; height:100%; display:block; image-rendering:auto; user-select:none; -webkit-user-drag:none; }
+  /* e-ink refresh: a short black flash, then the new page */
+  .screen .flash { position:absolute; inset:0; background:#000; opacity:0; pointer-events:none; }
+  .screen.refresh .flash { animation:flash .32s steps(2, end); }
+  @keyframes flash { 0% { opacity:1; } 50% { opacity:.0; background:#fff; } 100% { opacity:0; } }
+  @media (prefers-reduced-motion: reduce) { .screen.refresh .flash { animation:none; } .device { transition:none; } }
+  .zone { position:absolute; top:12%; bottom:0; width:22%; }
+  .zone.l { left:0; } .zone.r { right:0; }
+  .zone:hover { background:linear-gradient(90deg, rgba(0,0,0,.05), transparent); }
+  .zone.r:hover { background:linear-gradient(270deg, rgba(0,0,0,.05), transparent); }
+  .hw { position:absolute; top:-14px; right:70px; display:flex; gap:10px; }
+  .device.port .hw { right:40px; }
+  .hw button { width:44px; height:14px; border-radius:7px 7px 0 0; border:2px solid var(--bezel-edge); border-bottom:0; background:var(--bezel); cursor:pointer; padding:0; }
+  .hw button:hover, .hw button:focus-visible { background:var(--bezel-edge); outline:none; }
+
+  .controls { display:flex; flex-wrap:wrap; justify-content:center; gap:10px; }
+  .controls button { font:600 13px Futura, "Century Gothic", sans-serif; letter-spacing:.1em; text-transform:uppercase; color:var(--ink); background:transparent; border:3px solid var(--ink); border-radius:24px; padding:10px 18px; cursor:pointer; min-height:44px; }
+  .controls button.on { background:var(--ink); color:var(--paper); }
+  .controls button:focus-visible { outline:3px solid var(--muted); outline-offset:2px; }
+  .status { font:600 12px Futura, sans-serif; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); text-align:center; min-height:1.5em; }
+  .hint { color:var(--muted); font-size:15px; text-align:center; max-width:60ch; margin:0 auto; }
+  kbd { font:600 12px Futura, sans-serif; border:2px solid var(--muted); border-radius:5px; padding:0 5px; }
+
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:16px; }
+  .grid.port { grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); }
+  figure { margin:0; }
+  figure img { width:100%; display:block; border:3px solid var(--ink); border-radius:12px; cursor:pointer; }
+  figcaption { font:600 12px Futura, sans-serif; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); margin-top:6px; }
+  ul.feat { padding-left:1.1em; max-width:70ch; } ul.feat li { margin:4px 0; }
+  footer { margin-top:44px; color:var(--muted); font-size:15px; }
+  footer a { color:inherit; }
+  @media (max-width:600px) { h1 { font-size:42px; } .device { padding:18px; border-radius:18px; } .hw { right:30px; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Sticky</h1>
+  <p class="lead">Home Assistant on a 7.5-inch e-ink screen. Calm <b>Glance</b> pages anyone can read from across the room, and big touch <b>Do</b> tiles for the air conditioning, the door, the vacuum and the dishwasher.</p>
+  <div class="links">
+    <a class="main" href="#demo">Try the demo</a>
+    <a href="https://github.com/kingstonbenjamin/sticky#setup">Set it up</a>
+    <a href="https://github.com/kingstonbenjamin/sticky">Source on GitHub</a>
+  </div>
+
+  <section id="demo" class="stage" aria-label="Interactive demo">
+    <div class="device" id="device">
+      <div class="hw" aria-hidden="true">
+        <button tabindex="-1" data-act="ai" title="AI button: Glance / Do"></button>
+        <button tabindex="-1" data-act="up" title="Up: previous page"></button>
+        <button tabindex="-1" data-act="down" title="Down: next page"></button>
+      </div>
+      <div class="screen" id="screen" role="img" aria-live="polite">
+        <img id="shot" src="today.png" alt="Today page">
+        <div class="zone l" data-act="up" title="Tap the left edge: previous page"></div>
+        <div class="zone r" data-act="down" title="Tap the right edge: next page"></div>
+        <div class="flash"></div>
+      </div>
+    </div>
+    <div class="status" id="status">Glance · Today · 1 of 14</div>
+    <div class="controls">
+      <button data-act="ai" id="b-ai" aria-pressed="false">AI button: Do</button>
+      <button data-act="up">▲ Up</button>
+      <button data-act="down">▼ Down</button>
+      <button data-act="turn" id="b-turn" aria-pressed="false">Turn it</button>
+      <button data-act="alert">Camera alert</button>
+    </div>
+    <p class="hint">Tap the left or right edge of the screen to change page, like on the real Sticky. Keys: <kbd>←</kbd> <kbd>→</kbd> pages, <kbd>Space</kbd> Glance / Do, <kbd>R</kbd> turn. These are the real screens, drawn by the firmware in the Mac preview with example data.</p>
+  </section>
+
+  <h2>What it does</h2>
+  <ul class="feat">
+    <li><b>Two sides.</b> Glance for everyone: clock and the day, calendar, weather, reminders, timer, guest Wi-Fi and a few slow pages. Do for the person who runs the house. The AI button switches; Do goes back to Glance after 5 minutes.</li>
+    <li><b>One big number per page,</b> readable across the room. Page dots appear when you change page and go away after 10 seconds.</li>
+    <li><b>Honest data:</b> "Updated 4 h ago" when weather or GitHub data is old, and a NOW marker on the hourly weather.</li>
+    <li><b>Wizards with step dots</b> for the dishwasher (program, options, start time) and the vacuum (mode, power, route). The door always asks first.</li>
+    <li><b>Battery friendly:</b> deep sleep on battery, wakes on a button or every few minutes to refresh.</li>
+    <li><b>Safe by design:</b> every action goes through one Home Assistant script that refuses anything not on its list.</li>
+  </ul>
+
+  <h2>Landscape</h2>
+  <div class="grid" id="g-land"></div>
+  <h2>Portrait</h2>
+  <div class="grid port" id="g-port"></div>
+
+  <footer>Example data only. ESPHome firmware for the Seeed reTerminal E1005, MIT licensed. Not affiliated with Seeed Studio or Home Assistant. <a href="https://github.com/kingstonbenjamin/sticky">github.com/kingstonbenjamin/sticky</a></footer>
+</main>
+<script>
+// The demo walks through the same screens the firmware draws, in the same order the buttons move through them.
+var SCREENS = {
+  land: {
+    glance: [['today','Today'],['calendar','Calendar'],['weather','Weather'],['forecast','Forecast'],['reminders','Reminders'],['history','History'],['year','Year'],['world-clock','World clock'],['life-in-weeks','Life in weeks'],['biorhythm','Biorhythm'],['now-playing','Now playing'],['kitchen-timer','Kitchen timer'],['guest-wifi','Guest Wi-Fi'],['github','GitHub']],
+    do: [['do-tiles','Tiles'],['do-ac-room','AC room'],['do-door-confirm','Door: asks first'],['do-dishwasher-wizard','Dishwasher wizard'],['do-vacuum-wizard','Vacuum wizard']]
+  },
+  port: {
+    glance: [['portrait-today','Today'],['portrait-calendar','Calendar'],['portrait-weather','Weather'],['portrait-reminders','Reminders']],
+    do: [['portrait-do-tiles','Tiles'],['portrait-do-ac-room','AC room'],['portrait-dishwasher-start','Dishwasher wizard'],['portrait-vacuum','Vacuum']]
+  }
+};
+var st = { way: 'land', side: 'glance', i: 0, alert: false };
+var $ = function (id) { return document.getElementById(id); };
+var screen = $('screen'), shot = $('shot');
+
+function list() { return SCREENS[st.way][st.side]; }
+function show(refresh) {
+  var name, label;
+  if (st.alert) { name = 'alert-camera'; label = 'Alert · Person seen · tap to clear'; if (st.way === 'port') st.way = 'land'; }
+  else { var s = list()[st.i]; name = s[0]; label = (st.side === 'glance' ? 'Glance' : 'Do') + ' · ' + s[1] + ' · ' + (st.i + 1) + ' of ' + list().length; }
+  $('device').classList.toggle('port', st.way === 'port');
+  shot.src = name + '.png'; shot.alt = label;
+  $('status').textContent = label;
+  $('b-ai').textContent = st.side === 'glance' ? 'AI button: Do' : 'AI button: Glance';
+  $('b-ai').classList.toggle('on', st.side === 'do'); $('b-ai').setAttribute('aria-pressed', st.side === 'do');
+  $('b-turn').classList.toggle('on', st.way === 'port'); $('b-turn').setAttribute('aria-pressed', st.way === 'port');
+  if (refresh) {
+    // WHY: removing and re-adding the class restarts the CSS animation on every page change
+    screen.classList.remove('refresh'); void screen.offsetWidth; screen.classList.add('refresh');
+  }
+}
+function act(a) {
+  if (st.alert) { st.alert = false; show(true); return; }
+  var n = list().length;
+  if (a === 'down') st.i = (st.i + 1) % n;
+  else if (a === 'up') st.i = (st.i + n - 1) % n;
+  else if (a === 'ai') { st.side = st.side === 'glance' ? 'do' : 'glance'; st.i = 0; }
+  else if (a === 'turn') {
+    var cur = list()[st.i][1];
+    st.way = st.way === 'land' ? 'port' : 'land';
+    var j = list().map(function (s) { return s[1]; }).indexOf(cur);
+    st.i = j < 0 ? 0 : j;
+  }
+  else if (a === 'alert') st.alert = true;
+  show(true);
+}
+document.addEventListener('click', function (e) {
+  var t = e.target.closest('[data-act]');
+  if (t) { act(t.getAttribute('data-act')); return; }
+  if (st.alert && e.target.closest('#screen')) act('clear');
+});
+document.addEventListener('keydown', function (e) {
+  if (e.target.closest('input, textarea')) return;
+  var k = { ArrowRight: 'down', ArrowDown: 'down', ArrowLeft: 'up', ArrowUp: 'up', ' ': 'ai', r: 'turn', R: 'turn' }[e.key];
+  if (!k) return;
+  // a focused button already handles Space itself
+  if (e.key === ' ' && e.target.closest('button')) return;
+  e.preventDefault(); act(k);
+});
+
+// gallery: every screen, click one to open it in the demo
+function gallery(way, el) {
+  ['glance', 'do'].forEach(function (side) {
+    SCREENS[way][side].forEach(function (s, i) {
+      var f = document.createElement('figure');
+      f.innerHTML = '<img loading="lazy" src="' + s[0] + '.png" alt="' + s[1] + '"><figcaption>' + s[1] + '</figcaption>';
+      f.querySelector('img').addEventListener('click', function () {
+        st = { way: way, side: side, i: i, alert: false }; show(true);
+        document.getElementById('demo').scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
+      el.appendChild(f);
+    });
+  });
+  if (way === 'land') {
+    var f = document.createElement('figure');
+    f.innerHTML = '<img loading="lazy" src="alert-camera.png" alt="Camera alert"><figcaption>Alert card</figcaption>';
+    f.querySelector('img').addEventListener('click', function () { st.alert = true; show(true); document.getElementById('demo').scrollIntoView({ behavior: 'smooth', block: 'center' }); });
+    el.appendChild(f);
+  }
+}
+gallery('land', $('g-land')); gallery('port', $('g-port'));
+// warm the cache so page changes feel instant
+['land', 'port'].forEach(function (w) { ['glance', 'do'].forEach(function (s) { SCREENS[w][s].forEach(function (x) { new Image().src = x[0] + '.png'; }); }); });
+show(false);
+</script>
+</body>
+</html>
