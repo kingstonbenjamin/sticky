@@ -161,7 +161,8 @@ script:
               - action: lock.unlock
                 target: { entity_id: lock.front_door }
           # usual vacuum run: set each option only if it differs, then start (Dreame integration values)
-          - conditions: "{{ what == 'vac_start' }}"
+          # WHY: the app's shortcut drops out of HA while the robot's cloud link is down; its button then runs the usual clean instead of nothing
+          - conditions: "{{ what == 'vac_start' or (what == 'vac_custom' and (states.button.robot_vacuum_shortcut_0 is none or is_state('button.robot_vacuum_shortcut_0', 'unavailable'))) }}"
             sequence:
               - repeat:
                   for_each:
@@ -199,7 +200,7 @@ script:
             sequence:
               - action: vacuum.return_to_base
                 target: { entity_id: vacuum.robot_vacuum }
-          # a saved shortcut from the vacuum's app
+          # a saved shortcut from the vacuum's app (when HA can't see it, the usual clean above runs instead)
           - conditions: "{{ what == 'vac_custom' }}"
             sequence:
               - action: button.press
