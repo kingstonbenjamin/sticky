@@ -33,7 +33,7 @@ esphome:
             S.lock_state = "locked";
             S.ac_state[0] = "cool"; S.ac_state[1] = "cool"; S.ac_state[2] = "off"; S.ac_state[3] = "cool"; S.ac_state[4] = "off"; S.ac_state[5] = "off";
             S.vacuum = "cleaning"; S.watering = true;
-            S.wx_cond = "partlycloudy"; S.wx_t = 27; S.wx_h = 53; S.wx_wind = 14;
+            S.wx_cond = "partlycloudy"; S.wx_t = 25.3; S.wx_h = 53; S.wx_wind = 14;
             S.forecast = "Wed|clear-night|26|25;Thu|sunny|29|22;Fri|sunny|29|20;Sat|exceptional|29|24;Sun|cloudy|28|22";
             S.agenda = "T|07:30|Gym;T|15:30|School pickup;T|19:00|Dinner out;M|09:00|Dentist;M|All day|Bin day";
             S.dish_state = "run"; S.dish_prog = 62; S.dish_finish = "2026-11-18T23:10:22+00:00";

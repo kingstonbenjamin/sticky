@@ -17,6 +17,7 @@
 #include <vector>
 #include <cmath>
 #include <ctime>
+#include "esphome/components/time/posix_tz.h"
 
 namespace sticky {
 
@@ -201,6 +202,9 @@ inline bool page_available(int p) {
   if (!S.page_on[p]) return false;
   if (p == P_GH && !CFG.github) return false;
   if (p == P_PLAY) return playing();
+  // WHY: Glance skips Calendar and Reminders while they have nothing to show; their Do tiles still open them
+  if (p == P_CAL) return S.agenda.find('|') != std::string::npos;
+  if (p == P_REM) return !(S.reminders.empty() || S.reminders == "none" || S.reminders == "unknown" || S.reminders == "unavailable");
   return true;
 }
 inline int next_page(int from, int dir) {
@@ -251,9 +255,64 @@ inline int64_t iso_to_epoch(const std::string &iso) {
   }
   return days_from_civil(Y, M, D) * 86400 + h * 3600 + m * 60 + sec - off;
 }
+#ifdef USE_TIME_TIMEZONE
+// Reads a POSIX zone like "EST5EDT,M3.2.0,M11.1.0" or "<+04>-4" for ESPHome's own converter.
+// Only the M (month.week.day) daylight-saving rules are read; a zone with other rules shows standard time.
+inline int tz_secs(const char *&p) {  // [+-]h[:mm[:ss]]
+  int sign = 1, h = 0, m = 0, s = 0;
+  if (*p == '+' || *p == '-') sign = *p++ == '-' ? -1 : 1;
+  while (isdigit((unsigned char) *p)) h = h * 10 + (*p++ - '0');
+  if (*p == ':') { p++; while (isdigit((unsigned char) *p)) m = m * 10 + (*p++ - '0'); }
+  if (*p == ':') { p++; while (isdigit((unsigned char) *p)) s = s * 10 + (*p++ - '0'); }
+  return sign * (h * 3600 + m * 60 + s);
+}
+inline bool tz_name(const char *&p) {
+  if (*p == '<') { while (*p && *p != '>') p++; if (*p) p++; return true; }
+  const char *b = p;
+  while (isalpha((unsigned char) *p)) p++;
+  return p > b;
+}
+inline bool tz_rule(const char *&p, esphome::time::DSTRule &r) {
+  if (*p++ != ',' || *p++ != 'M') return false;
+  int v[3] = {0, 0, 0};
+  for (int i = 0; i < 3; i++) {
+    while (isdigit((unsigned char) *p)) v[i] = v[i] * 10 + (*p++ - '0');
+    if (i < 2 && *p++ != '.') return false;
+  }
+  r.type = esphome::time::DSTRuleType::MONTH_WEEK_DAY;
+  r.month = v[0]; r.week = v[1]; r.day_of_week = v[2]; r.day = 0;
+  r.time_seconds = 7200;
+  if (*p == '/') { p++; r.time_seconds = tz_secs(p); }
+  return true;
+}
+inline esphome::time::ParsedTimezone parse_zone(const std::string &zone) {
+  esphome::time::ParsedTimezone tz{};
+  const char *p = zone.c_str();
+  tz_name(p);
+  tz.std_offset_seconds = tz_secs(p);  // POSIX counts west of UTC as positive, like ESPHome
+  tz.dst_offset_seconds = tz.std_offset_seconds;
+  if (tz_name(p)) {
+    tz.dst_offset_seconds = (*p && *p != ',') ? tz_secs(p) : tz.std_offset_seconds - 3600;
+    esphome::time::DSTRule a{}, b{};
+    if (tz_rule(p, a) && tz_rule(p, b)) { tz.dst_start = a; tz.dst_end = b; }
+  }
+  return tz;
+}
+#endif
 // Local wall clock for a moment, in the device's time zone or in another POSIX zone.
-// WHY: the C library's localtime_r knows daylight saving rules; the TZ setting is restored straight after.
 inline void local_time(int64_t utc, int &mins, int64_t &day, const std::string &zone = "") {
+  struct tm tm;
+  time_t t = (time_t) utc;
+#ifdef USE_TIME_TIMEZONE
+  // WHY: on the device ESPHome replaces localtime_r with its own, which always uses the home zone and ignores TZ
+  if (!zone.empty()) {
+    esphome::time::epoch_to_local_tm(t, parse_zone(zone), &tm);
+    mins = tm.tm_hour * 60 + tm.tm_min;
+    day = days_from_civil(tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
+    return;
+  }
+#endif
+  // the C library's localtime_r knows daylight saving rules; the TZ setting is restored straight after
   std::string keep;
   if (!zone.empty()) {
     const char *old = getenv("TZ");
@@ -261,8 +320,6 @@ inline void local_time(int64_t utc, int &mins, int64_t &day, const std::string &
     setenv("TZ", zone.c_str(), 1);
     tzset();
   }
-  time_t t = (time_t) utc;
-  struct tm tm;
   localtime_r(&t, &tm);
   if (!zone.empty()) {
     if (keep.empty()) unsetenv("TZ"); else setenv("TZ", keep.c_str(), 1);
@@ -1420,10 +1477,13 @@ inline void page_weather_now(Display &it, const char *clk, esphome::ESPTime now)
   // ---- the big part (about 70%): temperature, humidity and wind now ----
   const int body = H - STRIP, big_h = body * 70 / 100;
   const int hum_y = STRIP + big_h, wind_y = hum_y + body * 13 / 100, hours_y = H - 4;
-  std::string t = temp_text(S.wx_t);
+  // whole degrees, like the forecast: the big font has no "." and 25.3° would run into the humidity column
+  char tb[12];
+  if (std::isnan(S.wx_t)) snprintf(tb, sizeof(tb), "--°"); else snprintf(tb, sizeof(tb), "%.0f°", S.wx_t);
+  std::string t = tb;
   if (L) {
     // three big numbers side by side: temperature (largest), humidity, wind
-    it.print(10, STRIP - 10, F.clock, INK, TextAlign::TOP_LEFT, t.c_str());
+    print_fit(it, 10, STRIP - 10, 284, TextAlign::TOP_LEFT, INK, t, {F.clock, F.huge});
     vline(it, 300, STRIP + 14, 150, 3);
     it.print(320, STRIP + 8, F.lbl, INK, TextAlign::TOP_LEFT, "HUMIDITY");
     if (std::isnan(S.wx_h)) snprintf(b, sizeof(b), "--"); else snprintf(b, sizeof(b), "%.0f%%", S.wx_h);
